@@ -3,6 +3,7 @@
 # signed in, and stays up until it is killed, like the real one.
 out=${STUB_OUT:?}
 printf '%s\n' "$*" >"$out/client.argv"
+printf '%s\n' "${LD_PRELOAD:-}" >"$out/client.preload"
 mapfile -t args
 printf '%s\n' "${args[@]}" >"$out/client.args"
 [[ ${args[0]:-} == *.rdp ]] && cp -- "${args[0]}" "$out/launch.rdp"

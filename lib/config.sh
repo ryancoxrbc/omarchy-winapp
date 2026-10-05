@@ -13,6 +13,7 @@ default_config() {
   ],
   "scale": "auto",
   "windowsSuffix": "auto",
+  "helperWindowFix": true,
   "rdpArgs": []
 }
 EOF

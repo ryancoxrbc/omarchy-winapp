@@ -37,6 +37,13 @@ cmd_doctor() {
   have sfreerdp3 || note "sfreerdp3 is missing" "the first sign-in after each Windows start will flash a window"
   have notify-send || note "notify-send is missing" "errors from the bar and the app launcher will not be shown"
   have gum || note "gum is missing" "winapp manage needs it: omarchy pkg add gum"
+  if ! shim_wanted; then
+    note "the helper-window fix is switched off (helperWindowFix in config.json)" "apps with an embedded browser, such as CorelDRAW, can freeze without it"
+  elif ensure_shim; then
+    ok "helper-window fix built"
+  else
+    note "the helper-window fix could not be built" "it needs a C compiler: omarchy pkg add gcc. Without it, apps such as CorelDRAW can freeze"
+  fi
   if [[ -e /dev/kvm ]]; then ok "KVM is available"; else bad "/dev/kvm is missing" "enable virtualization in the firmware setup"; fi
   if [[ -L $BIN_LINK && $(realpath -- "$BIN_LINK" 2>/dev/null) == "$SELF" ]]; then
     ok "winapp is on PATH ($BIN_LINK)"

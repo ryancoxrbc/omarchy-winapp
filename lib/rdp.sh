@@ -43,6 +43,32 @@ compose_value() {
   printf '%s' "$v"
 }
 
+# --- the helper-window fix ---------------------------------------------------
+# shim/xshim.c explains what it corrects in xfreerdp and why: without it,
+# programs with an embedded Internet Explorer control (CorelDRAW's welcome
+# screen) freeze on any display that is not scaled 1x. It is a few lines of C
+# loaded into the client, so it is built here, from the source in the plugin,
+# the first time it is needed and again whenever that source changes.
+SHIM_SOURCE=$ROOT/shim/xshim.c
+SHIM=$DATA_DIR/xshim.so
+
+shim_wanted() { [[ $(cfg_json | jq -r '.helperWindowFix') != false ]]; }
+
+# True when the fix is built and current. Does without, quietly, when there is
+# no C compiler: apps still open, minus the fix (`winapp doctor` says so).
+ensure_shim() {
+  shim_wanted && [[ -f $SHIM_SOURCE ]] || return 1
+  [[ -s $SHIM && ! $SHIM_SOURCE -nt $SHIM ]] && return 0
+  have cc || return 1
+  mkdir -p "$DATA_DIR"
+  if cc -shared -fPIC -O2 -o "$SHIM.$$" "$SHIM_SOURCE" -ldl -lpthread 2>/dev/null; then
+    mv -f "$SHIM.$$" "$SHIM"
+  else
+    rm -f "$SHIM.$$"
+    return 1
+  fi
+}
+
 # rdp_spawn <client> <log> <.rdp file or ""> [args...]
 # Starts the client in the background and sets RDP_PID.
 #
@@ -51,10 +77,13 @@ compose_value() {
 # /args-from must be the client's only argument. FreeRDP block-buffers its log
 # when not on a terminal and callers wait for lines in it, hence stdbuf.
 rdp_spawn() {
-  local client=$1 log=$2 file=$3
+  local client=$1 log=$2 file=$3 preload=${LD_PRELOAD:-}
   shift 3
+  ensure_shim && preload=$SHIM${preload:+:$preload}
   (
     release_locks
+    # stdbuf adds its own library to this list rather than replacing it
+    [[ -n $preload ]] && export LD_PRELOAD=$preload
     exec stdbuf -oL -eL "$client" /args-from:stdin
   ) >>"$log" 2>&1 < <(
     [[ -n $file ]] && printf '%s\n' "$file"

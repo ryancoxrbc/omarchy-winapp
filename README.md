@@ -191,6 +191,7 @@ winapp setup | doctor [--deep] | logs | passwordless on|off | uninstall
 | `shares` | home as `home` | Folders redirected into Windows. |
 | `scale` | `"auto"` | `"auto"` follows the focused monitor; or a percentage such as `150`. |
 | `windowsSuffix` | `"auto"` | Add " (Windows)" to a launcher name: `"auto"` only when another app has the same name, `"always"`, or `"never"`. |
+| `helperWindowFix` | `true` | Keeps programs such as CorelDRAW from freezing; see [how it works](docs/how-it-works.md#the-helper-window-fix). |
 | `rdpArgs` | `[]` | Extra FreeRDP arguments for every session, for example `["/microphone"]` or `["/kbd:layout:0x0407"]`. |
 
 `~/.config/winapp/apps.json` is the app list. It can be edited by hand; run

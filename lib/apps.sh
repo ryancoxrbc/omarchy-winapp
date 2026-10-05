@@ -121,6 +121,24 @@ exec_path() {
   fi
 }
 
+# That path as the first word of an Exec line. Left bare whenever the desktop
+# entry rules allow it: xdg-mime takes the first word quotes and all, cannot
+# find a command by that name, and then passes the entry over as a default
+# app in favour of any other program that opens the type. A path that does
+# need quoting is replaced by the bare command name when that finds the same
+# file, and quoted only as a last resort.
+exec_word() {
+  local bin
+  bin=$(exec_path)
+  if [[ $bin =~ ^[A-Za-z0-9_./+@:,=-]+$ ]]; then
+    printf '%s\n' "$bin"
+  elif [[ $(command -v winapp 2>/dev/null) -ef $bin ]]; then
+    printf 'winapp\n'
+  else
+    printf '"%s"\n' "$bin"
+  fi
+}
+
 # The names other launcher entries go by, lower case, one per line. Omarchy's
 # Microsoft web apps are called "Microsoft Word" and so on, exactly like the
 # real programs; two entries with one name cannot be told apart in the launcher.
@@ -147,7 +165,7 @@ sync_desktop() {
   local id name shown icon categories own also mimes claim ext m f bin handled suffix taken keep=() wanted=()
   local -A is_handled=() is_taken=()
   mkdir -p "$APP_DIR"
-  bin=$(exec_path)
+  bin=$(exec_word)
   handled=$(handled_mimes)
   while IFS= read -r m; do [[ -n $m ]] && is_handled[$m]=1; done <<<"$handled"
   # "(Windows)" after a name: auto = only where another entry has that name
@@ -184,7 +202,7 @@ sync_desktop() {
       echo "Type=Application"
       echo "Name=$shown"
       echo "Comment=Windows app; opens Linux files in place"
-      echo "Exec=\"$bin\" $id %F"
+      echo "Exec=$bin $id %F"
       echo "Icon=${icon:-$FALLBACK_ICON}"
       echo "Terminal=false"
       echo "Categories=${categories:-Utility;}"

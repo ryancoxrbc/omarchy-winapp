@@ -158,7 +158,8 @@ if group "apps: the list, menu entries and file types"; then (
     --name "CorelDRAW 2024" --ext cdr,.QZX9 --opens svg --icon "$ROOT/tests/fixtures/icon.png" --default
   entry=$(cat "$XDG_DATA_HOME/applications/winapp-coreldraw.desktop")
   has "the menu entry is named" "$entry" "Name=CorelDRAW 2024"
-  has "…and opens files through winapp" "$entry" "\" coreldraw %F"
+  has "…and opens files through winapp" "$entry" "winapp coreldraw %F"
+  lacks "…by a path xdg-mime can resolve, so not quoted" "$entry" 'Exec="'
   has "…and lists its file types" "$entry" "MimeType="
   has "an unknown extension gets a private type" "$entry" "application/x-winapp-qzx9"
   has "…registered for that extension" "$(cat "$XDG_DATA_HOME/mime/packages/winapp-qzx9.xml")" '<glob pattern="*.qzx9"/>'
@@ -257,6 +258,9 @@ if group "launch: starting the VM and an app"; then (
   has "…with fixed arguments and the quoted file, apostrophe and comma intact" "$rdp" \
     'remoteapplicationcmdline:s:/q "\\tsclient\home\Documents\Sam'"'"'s report, final.docx"'
   args=$(cat "$STUB_OUT/client.args" 2>/dev/null)
+  if command -v cc >/dev/null && [[ -e /usr/include/X11/Xlib.h ]]; then
+    has "the helper-window fix is built and loaded into the client" "$(cat "$STUB_OUT/client.preload")" "$XDG_DATA_HOME/winapp/xshim.so"
+  fi
   has "credentials go in over stdin" "$args" '/u:tester'
   has "…with = and quotes in the password intact" "$args" '/p:p=ss w"rd'
   has "home is redirected" "$args" "/drive:home,$HOME"
@@ -399,6 +403,15 @@ if group "settings and failure messages"; then (
   echo "ERRCONNECT_LOGON_FAILURE [0x00020014]" >"$log"
   is "a wrong password is recognised" "$(rdp_failure "$log")" "auth"
 
+  (
+    exec_path() { echo "/home/some one/.local/bin/winapp"; }
+    is "a launcher path that needs quoting is quoted when there is no other way" "$(exec_word)" '"/home/some one/.local/bin/winapp"'
+  )
+  cfg_set helperWindowFix false
+  shim_wanted && fail "helperWindowFix: false switches the fix off" || pass
+  ensure_shim && fail "…and nothing is built then" || pass
+  cfg_set helperWindowFix true
+
   STUB_SCALE=1.6
   export STUB_SCALE
   is "a 160% monitor asks Windows for 140% rendering" "$(scale_args | tr '\n' ' ')" "/scale:140 /scale-desktop:160 "
@@ -425,7 +438,7 @@ if group "setup and uninstall"; then (
   succeeds "setup can be run again" "$WINAPP" setup --yes --no-scan
 
   "$WINAPP" add demo --exe 'C:\\demo.exe' --ext qzx9 --icon "$ROOT/tests/fixtures/icon.png" >/dev/null 2>&1
-  has "menu entries call the linked command" "$(cat "$XDG_DATA_HOME/applications/winapp-demo.desktop")" "Exec=\"$HOME/.local/bin/winapp\" demo %F"
+  has "menu entries call the linked command" "$(cat "$XDG_DATA_HOME/applications/winapp-demo.desktop")" "Exec=$HOME/.local/bin/winapp demo %F"
 
   succeeds "uninstall" "$WINAPP" uninstall --yes
   [[ ! -e $HOME/.local/bin/winapp ]] && pass || fail "uninstall removes the link"
@@ -439,6 +452,23 @@ if group "setup and uninstall"; then (
 
   rm -f "$WINAPP_VM_HELPER"
   refuses "setup needs Omarchy's Windows VM support" "$WINAPP" setup --yes --no-scan
+  exit $failed
+); failed=$((failed + $?)); fi
+
+# -------------------------------------------------------------------------------
+if group "shim: the helper-window fix"; then (
+  failed=0
+  if ! command -v cc >/dev/null || [[ ! -e /usr/include/X11/Xlib.h ]]; then
+    echo "  skipped: needs a C compiler and the X11 headers"
+    exit 0
+  fi
+  build=$TMP/world/shim
+  mkdir -p "$build"
+  succeeds "the shim compiles without warnings" cc -shared -fPIC -O2 -Wall -Wextra -Werror -o "$build/xshim.so" "$ROOT/shim/xshim.c" -ldl -lpthread
+  succeeds "the test harness compiles" bash -c "cc -shared -fPIC -o '$build/libfakex.so' '$HERE/shim/fakex.c' && cc -o '$build/test' '$HERE/shim/test.c' -L'$build' -lfakex -Wl,-rpath,'$build'"
+  out=$(LD_PRELOAD=$build/xshim.so "$build/test")
+  is "unmanaged windows are not focused or resized; ordinary ones are untouched" "$?:$out" "0:"
+  if "$build/test" >/dev/null; then fail "the harness notices when the shim is not loaded"; else pass; fi
   exit $failed
 ); failed=$((failed + $?)); fi
 

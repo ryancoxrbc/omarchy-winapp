@@ -29,6 +29,14 @@ Windows restarted while winapp thought it was still signed in. It normally
 notices and retries by itself; if you do see the prompt, close the window and
 open the app again.
 
+**The app's window is black or white, says "Not Responding", and ignores the
+mouse; tiny extra windows may appear next to it.**
+This was CorelDRAW's welcome screen before 2.0.1, and can be any program with
+an embedded Internet Explorer control. Update the plugin, then check that
+`winapp doctor` says "helper-window fix built"; it needs a C compiler
+(`omarchy pkg add gcc`). To get out of a frozen app: `winapp stop`, then open
+it again.
+
 **"the Windows desktop is open…"**
 Windows shows either its desktop or single apps, not both at once. Close the
 desktop window (winapp's, or the one Omarchy's own *Windows* launcher opened)

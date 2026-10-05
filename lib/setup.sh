@@ -69,7 +69,8 @@ step() { printf '  %s\n' "$*"; }
 install_packages() {
   local missing=() cmd
   local -A package=([xfreerdp3]=freerdp [jq]=jq [notify-send]=libnotify [gum]=gum [xdg-mime]=xdg-utils
-    [update-desktop-database]=desktop-file-utils [update-mime-database]=shared-mime-info [flock]=util-linux)
+    [update-desktop-database]=desktop-file-utils [update-mime-database]=shared-mime-info [flock]=util-linux
+    [cc]=gcc)
   for cmd in "${!package[@]}"; do have "$cmd" || missing+=("${package[$cmd]}"); done
   ((${#missing[@]})) || return 0
   step "Installing: ${missing[*]}"
@@ -149,6 +150,9 @@ cmd_setup() {
   ensure_apps
   sync_desktop
   enable_plugin
+  if shim_wanted && ! ensure_shim; then
+    step "Could not build the helper-window fix (see: winapp doctor); apps still open without it"
+  fi
 
   if ! vm_installed; then
     say ""
@@ -227,7 +231,7 @@ cmd_uninstall() {
     step "Removed $BIN_LINK"
   fi
   # $DATA_DIR/backup, if there is one, holds a file of the user's that setup moved aside
-  rm -rf "$ICON_DIR" "$CACHE_DIR" "$RUN_DIR" "${LOG_DIR%/log}"
+  rm -rf "$ICON_DIR" "$SHIM" "$CACHE_DIR" "$RUN_DIR" "${LOG_DIR%/log}"
   rmdir "$DATA_DIR" 2>/dev/null
   if ((purge)); then
     rm -rf "$CONFIG_DIR"

@@ -73,6 +73,34 @@ Things that were learned the hard way and are handled:
   on the command line, where any user on the machine could read them for as
   long as the session lasts.
 
+## The helper-window fix
+
+Windows programs keep windows around that nobody is meant to see or touch: the
+hidden windows of an embedded Internet Explorer control, pseudo-console
+windows, and also every classic menu and tooltip. xfreerdp shows them as
+unmanaged (override-redirect) X11 windows, which is right, but two things then
+go wrong on a compositor like Hyprland:
+
+- xfreerdp labels them as dialogs, and Hyprland gives keyboard focus to
+  unmanaged windows of that type. xfreerdp answers focus by telling Windows to
+  activate the hidden window.
+- When X11 programs are scaled (anything but 1x: always at a fractional scale,
+  for odd sizes at 2x), a window's geometry comes back from the compositor
+  rounded by a pixel, and xfreerdp reports that to Windows as the user having
+  resized the window. A window Windows keeps at 0x0 ends up 21x21 and visible.
+
+A program does not expect either to happen to a window it hides. One with an
+Internet Explorer control, CorelDRAW's welcome screen for instance, answers by
+spinning its UI thread: "Not Responding", for good.
+
+`shim/xshim.c` is about a hundred lines of C that winapp loads into xfreerdp
+(`LD_PRELOAD`). For unmanaged windows only, it changes the label to the one
+xfreerdp itself first picks for them, which compositors do not focus, and
+withholds geometry notifications, since Windows alone decides where such a
+window is. Ordinary windows are untouched. It is compiled from the source in
+the plugin the first time an app is opened, and again when that source changes;
+`"helperWindowFix": false` in `config.json` switches it off.
+
 ## Files are redirected, not shared
 
 FreeRDP's drive redirection makes a Linux folder appear in the session as

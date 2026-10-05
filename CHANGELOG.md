@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.0.1 - 2026-10-05
+
+### Fixed
+
+- Programs with an embedded Internet Explorer control froze at start-up
+  ("Not Responding", one CPU core pinned) on any display not scaled 1x, and
+  classic menus took keyboard focus when opened. CorelDRAW's welcome screen is
+  the best-known case (#1). The RDP client was activating and resizing windows
+  that Windows programs keep hidden; a small library loaded into it
+  (`shim/xshim.c`) now leaves those windows alone. It is built automatically
+  and needs a C compiler; `winapp doctor` reports on it.
+- An app set as the default for a file type that a Linux app also opens was
+  ignored by `xdg-mime` and `xdg-open`, because the launcher entry's `Exec`
+  line was quoted (#2). The path is now written bare. Run `winapp sync` to
+  rewrite existing entries.
+
 ## 2.0.0 - 2026-10-05
 
 First public release. Rewritten from a personal script and widget into a
