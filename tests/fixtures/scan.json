@@ -1,0 +1,17 @@
+{
+  "windows": { "caption": "Microsoft Windows 11 Pro", "version": "10.0.26200" },
+  "remoteapp": { "allowUnlisted": 1, "allowListDisabled": 1 },
+  "scanned": 1700000000,
+  "apps": [
+    { "name": "Word", "exe": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE", "args": "", "ext": ["doc", "docx", "rtf", "wbk"] },
+    { "name": "CorelDRAW 2024", "exe": "C:\\Program Files\\Corel\\CorelDRAW Graphics Suite 2024\\Programs64\\CorelDRW.exe", "args": "", "ext": ["cdr", "cdt"] },
+    { "name": "CorelDRAW 2024 (Safe Mode)", "exe": "C:\\Program Files\\Corel\\CorelDRAW Graphics Suite 2024\\Programs64\\CorelDRW.exe", "args": "-safemode", "ext": ["cdr", "cdt"] },
+    { "name": "Affinity Photo", "exe": "C:\\Program Files\\Affinity\\Photo\\Photo.exe", "args": "", "ext": ["afphoto"] },
+    { "name": "Photo Booth Pro", "exe": "C:\\Program Files\\Booth\\Photo.exe", "args": "", "ext": [] },
+    { "name": "Discord", "exe": "C:\\Users\\docker\\AppData\\Local\\Discord\\Update.exe", "args": "--processStart Discord.exe", "ext": [] },
+    { "name": "Sign Cutter 5", "exe": "C:\\Program Files\\SignCutter\\cutter.exe", "args": "", "ext": ["scut", "plt"] },
+    { "name": "Uninstall Sign Cutter", "exe": "C:\\Program Files\\SignCutter\\unins000.exe", "args": "", "ext": [] },
+    { "name": "Character Map", "exe": "C:\\Windows\\System32\\charmap.exe", "args": "", "ext": [] },
+    { "name": "Run", "exe": "C:\\Tools\\run.exe", "args": "", "ext": [] }
+  ]
+}

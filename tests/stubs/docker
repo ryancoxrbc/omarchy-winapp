@@ -1,0 +1,14 @@
+#!/bin/bash
+# The VM is "running" while tests/…/vm-running exists.
+out=${STUB_OUT:?}
+echo "docker $*" >>"$out/docker.calls"
+case "$1" in
+inspect)
+  [[ -e $out/vm-running ]] || exit 1
+  case "$*" in
+  *State.Status*) echo running ;;
+  *State.StartedAt*) echo 2026-01-01T00:00:00Z ;;
+  esac
+  ;;
+logs) echo "Windows started successfully" ;;
+esac

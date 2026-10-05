@@ -1,0 +1,14 @@
+#!/bin/bash
+# One app window for the stub client while tests/…/window-open exists.
+out=${STUB_OUT:?}
+case "$1 $2" in
+"clients -j")
+  if [[ -e $out/window-open && -s $out/client.pid ]]; then
+    printf '[{"class":"winapp","title":"Test - App","pid":%s}]\n' "$(cat "$out/client.pid")"
+  else
+    echo '[]'
+  fi
+  ;;
+"monitors -j") echo '[{"focused":true,"scale":'"${STUB_SCALE:-1}"'}]' ;;
+*) echo '[]' ;;
+esac

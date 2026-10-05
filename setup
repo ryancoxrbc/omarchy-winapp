@@ -1,0 +1,5 @@
+#!/bin/bash
+# `omarchy plugin add` only clones this repository. This does the rest:
+# installs what is missing, puts the `winapp` command on PATH, adds the widget
+# to the bar and offers to pick your Windows apps. Safe to run again.
+exec "$(dirname -- "$(realpath -- "${BASH_SOURCE[0]}")")/bin/winapp" setup "$@"

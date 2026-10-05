@@ -1,0 +1,3 @@
+#!/bin/bash
+# gum is only needed interactively; the tests just need it to exist.
+exit 0

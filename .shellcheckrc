@@ -1,0 +1,3 @@
+# jq filters are full of $names that are jq's, not the shell's
+disable=SC2016
+external-sources=true

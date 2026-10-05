@@ -1,0 +1,7 @@
+#!/bin/bash
+out=${STUB_OUT:?}
+echo "pkexec $*" >>"$out/pkexec.calls"
+case "$*" in
+*"__priv up_wait") : >"$out/vm-running" ;;
+*"__priv down") rm -f "$out/vm-running" ;;
+esac

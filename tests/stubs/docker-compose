@@ -1,0 +1,7 @@
+#!/bin/bash
+out=${STUB_OUT:?}
+echo "docker-compose $*" >>"$out/docker.calls"
+case "$*" in
+*" up -d") : >"$out/vm-running" ;;
+*" down") rm -f "$out/vm-running" ;;
+esac

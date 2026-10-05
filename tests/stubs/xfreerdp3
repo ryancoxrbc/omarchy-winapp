@@ -1,0 +1,16 @@
+#!/bin/bash
+# Stand-in for the FreeRDP client: records what it was asked to do, says it
+# signed in, and stays up until it is killed, like the real one.
+out=${STUB_OUT:?}
+printf '%s\n' "$*" >"$out/client.argv"
+mapfile -t args
+printf '%s\n' "${args[@]}" >"$out/client.args"
+[[ ${args[0]:-} == *.rdp ]] && cp -- "${args[0]}" "$out/launch.rdp"
+echo $$ >"$out/client.pid"
+echo "[INFO] Logon Extended Info [cookie: TRUE, LogonId: 4, errorInfo: FALSE]"
+[[ -e $out/client.fail ]] && { cat "$out/client.fail"; exit 1; }
+# not exec: the process has to keep this script's name, which is how winapp
+# tells its own clients from anything else
+sleep 600 &
+trap 'kill $! 2>/dev/null; exit 143' TERM
+wait $!

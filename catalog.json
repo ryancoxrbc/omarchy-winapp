@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "apps": [
+    {
+      "id": "word",
+      "name": "Microsoft Word",
+      "label": "Word",
+      "categories": "Office;WordProcessor;",
+      "exe": ["winword.exe"],
+      "ext": ["docx", "doc", "docm", "dotx", "dotm"],
+      "opens": ["rtf", "odt"],
+      "registry": [
+        { "key": "HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General", "name": "PreferCloudSaveLocations", "type": "REG_DWORD", "value": "0" },
+        { "key": "HKCU\\Software\\Microsoft\\Office\\16.0\\Word\\Options", "name": "DOC-PATH", "type": "REG_EXPAND_SZ", "value": "{documents}" }
+      ]
+    },
+    {
+      "id": "excel",
+      "name": "Microsoft Excel",
+      "label": "Excel",
+      "categories": "Office;Spreadsheet;",
+      "exe": ["excel.exe"],
+      "ext": ["xlsx", "xls", "xlsm", "xlsb", "xltx", "xltm"],
+      "opens": ["csv", "ods"],
+      "registry": [
+        { "key": "HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General", "name": "PreferCloudSaveLocations", "type": "REG_DWORD", "value": "0" },
+        { "key": "HKCU\\Software\\Microsoft\\Office\\16.0\\Excel\\Options", "name": "DefaultPath", "type": "REG_EXPAND_SZ", "value": "{documents}" }
+      ]
+    },
+    {
+      "id": "powerpoint",
+      "name": "Microsoft PowerPoint",
+      "label": "PowerPoint",
+      "categories": "Office;Presentation;",
+      "exe": ["powerpnt.exe"],
+      "ext": ["pptx", "ppt", "pptm", "ppsx", "pps", "potx"],
+      "opens": ["odp"],
+      "registry": [
+        { "key": "HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General", "name": "PreferCloudSaveLocations", "type": "REG_DWORD", "value": "0" },
+        { "key": "HKCU\\Software\\Microsoft\\Office\\16.0\\PowerPoint\\RecentFolderList", "name": "Default", "type": "REG_EXPAND_SZ", "value": "{documents}" }
+      ]
+    },
+    { "id": "outlook", "name": "Microsoft Outlook", "label": "Outlook", "categories": "Office;Email;", "exe": ["outlook.exe"], "ext": ["msg", "pst", "ost"], "opens": ["eml", "ics", "vcf"] },
+    { "id": "onenote", "name": "Microsoft OneNote", "label": "OneNote", "categories": "Office;", "exe": ["onenote.exe"], "ext": ["one", "onepkg"] },
+    { "id": "access", "name": "Microsoft Access", "label": "Access", "categories": "Office;Database;", "exe": ["msaccess.exe"], "ext": ["accdb", "mdb", "accde"] },
+    { "id": "publisher", "name": "Microsoft Publisher", "label": "Publisher", "categories": "Office;Publishing;", "exe": ["mspub.exe"], "ext": ["pub"] },
+    { "id": "visio", "name": "Microsoft Visio", "label": "Visio", "categories": "Office;FlowChart;", "exe": ["visio.exe"], "ext": ["vsdx", "vsd", "vssx", "vstx", "vsdm"] },
+    { "id": "project", "name": "Microsoft Project", "label": "Project", "categories": "Office;ProjectManagement;", "exe": ["winproj.exe"], "ext": ["mpp", "mpt"] },
+
+    { "id": "coreldraw", "name": "CorelDRAW", "label": "CorelDRAW", "categories": "Graphics;VectorGraphics;", "exe": ["coreldrw.exe"], "ext": ["cdr", "cdt", "cdrt", "cmx"], "opens": ["ai", "eps", "svg", "pdf", "dxf", "dwg", "plt", "wmf", "emf"] },
+    { "id": "photopaint", "name": "Corel PHOTO-PAINT", "label": "PHOTO-PAINT", "categories": "Graphics;RasterGraphics;", "exe": ["corelpp.exe"], "ext": ["cpt"], "opens": ["psd", "png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif", "webp"] },
+
+    { "id": "photoshop", "name": "Adobe Photoshop", "label": "Photoshop", "categories": "Graphics;RasterGraphics;", "exe": ["photoshop.exe"], "ext": ["psd", "psb"], "opens": ["png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif", "webp", "heic"] },
+    { "id": "illustrator", "name": "Adobe Illustrator", "label": "Illustrator", "categories": "Graphics;VectorGraphics;", "exe": ["illustrator.exe"], "ext": ["ai", "ait"], "opens": ["eps", "svg", "pdf"] },
+    { "id": "indesign", "name": "Adobe InDesign", "label": "InDesign", "categories": "Graphics;Publishing;", "exe": ["indesign.exe"], "ext": ["indd", "indt", "idml", "indb"] },
+    { "id": "premiere", "name": "Adobe Premiere Pro", "label": "Premiere", "categories": "AudioVideo;Video;AudioVideoEditing;", "exe": ["adobe premiere pro.exe"], "ext": ["prproj"] },
+    { "id": "aftereffects", "name": "Adobe After Effects", "label": "After Effects", "categories": "AudioVideo;Video;AudioVideoEditing;", "exe": ["afterfx.exe"], "ext": ["aep", "aet"] },
+    { "id": "acrobat", "name": "Adobe Acrobat", "label": "Acrobat", "categories": "Office;Viewer;", "exe": ["acrobat.exe", "acrord32.exe"], "opens": ["pdf"] },
+    { "id": "lightroom", "name": "Adobe Lightroom", "label": "Lightroom", "categories": "Graphics;Photography;", "exe": ["lightroom.exe"], "ext": ["lrcat"] },
+    { "id": "audition", "name": "Adobe Audition", "label": "Audition", "categories": "AudioVideo;Audio;AudioVideoEditing;", "exe": ["adobe audition.exe"], "ext": ["sesx"] },
+    { "id": "animate", "name": "Adobe Animate", "label": "Animate", "categories": "Graphics;", "exe": ["animate.exe"], "ext": ["fla", "xfl"] },
+
+    { "id": "affinity-photo", "name": "Affinity Photo", "label": "Affinity Photo", "categories": "Graphics;RasterGraphics;", "exe": ["photo.exe"], "pathContains": "affinity", "ext": ["afphoto"], "opens": ["psd", "png", "jpg", "jpeg", "tif", "tiff"] },
+    { "id": "affinity-designer", "name": "Affinity Designer", "label": "Affinity Designer", "categories": "Graphics;VectorGraphics;", "exe": ["designer.exe"], "pathContains": "affinity", "ext": ["afdesign"], "opens": ["svg", "eps", "ai", "pdf"] },
+    { "id": "affinity-publisher", "name": "Affinity Publisher", "label": "Affinity Publisher", "categories": "Graphics;Publishing;", "exe": ["publisher.exe"], "pathContains": "affinity", "ext": ["afpub"] },
+    { "id": "affinity", "name": "Affinity", "label": "Affinity", "categories": "Graphics;", "exe": ["affinity.exe"], "ext": ["af", "afphoto", "afdesign", "afpub"] },
+
+    { "id": "autocad", "name": "AutoCAD", "label": "AutoCAD", "categories": "Graphics;Engineering;", "exe": ["acad.exe"], "ext": ["dwg", "dxf", "dwt", "dws"] },
+    { "id": "autocad-lt", "name": "AutoCAD LT", "label": "AutoCAD LT", "categories": "Graphics;Engineering;", "exe": ["acadlt.exe"], "ext": ["dwg", "dxf", "dwt"] },
+    { "id": "inventor", "name": "Autodesk Inventor", "label": "Inventor", "categories": "Graphics;Engineering;", "exe": ["inventor.exe"], "ext": ["ipt", "iam", "idw", "ipn"], "opens": ["step", "stp", "iges", "igs"] },
+    { "id": "revit", "name": "Autodesk Revit", "label": "Revit", "categories": "Graphics;Engineering;", "exe": ["revit.exe"], "ext": ["rvt", "rfa", "rte"] },
+    { "id": "3dsmax", "name": "Autodesk 3ds Max", "label": "3ds Max", "categories": "Graphics;3DGraphics;", "exe": ["3dsmax.exe"], "ext": ["max"] },
+
+    { "id": "solidworks", "name": "SOLIDWORKS", "label": "SolidWorks", "categories": "Graphics;Engineering;", "exe": ["sldworks.exe"], "ext": ["sldprt", "sldasm", "slddrw"], "opens": ["step", "stp", "iges", "igs", "x_t", "stl"] },
+    { "id": "edrawings", "name": "eDrawings", "label": "eDrawings", "categories": "Graphics;Engineering;Viewer;", "exe": ["edrawings.exe", "emodelviewer.exe"], "ext": ["eprt", "easm", "edrw"], "opens": ["sldprt", "sldasm", "slddrw", "dwg", "dxf"] },
+    { "id": "sketchup", "name": "SketchUp", "label": "SketchUp", "categories": "Graphics;3DGraphics;", "exe": ["sketchup.exe"], "ext": ["skp"] },
+    { "id": "rhino", "name": "Rhino", "label": "Rhino", "categories": "Graphics;3DGraphics;", "exe": ["rhino.exe"], "ext": ["3dm"] },
+
+    { "id": "paintnet", "name": "paint.net", "label": "paint.net", "categories": "Graphics;RasterGraphics;", "exe": ["paintdotnet.exe"], "ext": ["pdn"], "opens": ["png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff"] },
+    { "id": "irfanview", "name": "IrfanView", "label": "IrfanView", "categories": "Graphics;Viewer;", "exe": ["i_view64.exe", "i_view32.exe"], "opens": ["png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff", "webp"] },
+    { "id": "notepadpp", "name": "Notepad++", "label": "Notepad++", "categories": "Utility;TextEditor;", "exe": ["notepad++.exe"] },
+
+    { "id": "powerbi", "name": "Power BI Desktop", "label": "Power BI", "categories": "Office;Database;", "exe": ["pbidesktop.exe"], "ext": ["pbix", "pbit"] },
+    { "id": "ssms", "name": "SQL Server Management Studio", "label": "SSMS", "categories": "Development;Database;", "exe": ["ssms.exe"], "opens": ["sql"] },
+    { "id": "visual-studio", "name": "Visual Studio", "label": "Visual Studio", "categories": "Development;IDE;", "exe": ["devenv.exe"], "ext": ["sln"] },
+    { "id": "matlab", "name": "MATLAB", "label": "MATLAB", "categories": "Science;Math;", "exe": ["matlab.exe"], "ext": ["mlx", "slx", "mlapp"] },
+    { "id": "quickbooks", "name": "QuickBooks", "label": "QuickBooks", "categories": "Office;Finance;", "exe": ["qbw.exe", "qbw32.exe"], "ext": ["qbw", "qbb", "qbm"] },
+    { "id": "itunes", "name": "iTunes", "label": "iTunes", "categories": "AudioVideo;Audio;Player;", "exe": ["itunes.exe"] }
+  ]
+}

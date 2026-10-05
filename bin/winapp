@@ -1,0 +1,119 @@
+#!/bin/bash
+# winapp - run apps from the Omarchy Windows VM as ordinary windows, on Linux
+# files opened in place. See usage() below, or `winapp help`.
+#
+# Nothing is copied into the VM: FreeRDP redirects folders into the session
+# (the home directory as \\tsclient\home) and the app opens the file there, so
+# saves land on the Linux side. The VM is started when needed and shut down a
+# few minutes after the last app window closes.
+
+set -u
+
+SELF=$(realpath -- "${BASH_SOURCE[0]}")
+ROOT=${SELF%/bin/*}
+
+usage() {
+  cat <<'EOF'
+winapp - Windows VM apps as ordinary windows, on Linux files in place
+
+Open
+  winapp <app> [file...]       open an app, e.g. winapp word ~/Documents/a.docx
+  winapp open <file>           open a file with whatever Windows uses for it
+  winapp run <program> [file]  run any program by its Windows path, or an
+                               installer (.exe, .msi) that is on the Linux side
+  winapp explorer [folder]     browse a Linux folder in Windows Explorer
+  winapp desktop               the whole Windows desktop, to install programs
+
+Apps
+  winapp manage                tick the installed programs you want on Linux
+  winapp scan [text]           list what is installed in Windows
+  winapp add <id> [options]    add a scanned program, or any program with --exe
+      --exe '<Windows path>'   --name <name>   --label <short name>
+      --ext cdr,cdt            its own file types   --opens pdf,svg   others it can open
+      --default | --no-default always or never the default app for its own types
+      --args '<fixed arguments>'   --icon <png|svg>
+      --no-panel               keep it out of the bar panel
+      --no-menu                keep it out of the app launcher (it still opens its files)
+  winapp remove <id>           forget an app and its menu entry
+  winapp apps [--json]         list the apps you have added
+  winapp icons [id...]         fetch the programs' icons from Windows again
+  winapp sync                  rebuild menu entries after editing apps.json by hand
+
+Windows
+  winapp start | stop          boot the VM without an app / shut it down now
+  winapp idle <minutes>        stop the VM this long after the last window (0 = never)
+  winapp status                what the VM is doing
+
+Folders
+  winapp shares                Linux folders Windows can reach
+  winapp share add <name> <folder>     share one (as \\tsclient\<name>)
+  winapp share remove <name>
+
+Setup
+  winapp setup                 install or repair everything
+  winapp doctor [--deep]       check that it all works
+  winapp passwordless on|off   start and stop the VM without a password prompt
+  winapp logs                  show the latest log
+  winapp uninstall [--purge]
+
+Settings are in ~/.config/winapp (config.json, apps.json).
+EOF
+}
+
+# shellcheck source=lib/common.sh
+source "$ROOT/lib/common.sh"
+# shellcheck source=lib/config.sh
+source "$ROOT/lib/config.sh"
+# shellcheck source=lib/vm.sh
+source "$ROOT/lib/vm.sh"
+# shellcheck source=lib/rdp.sh
+source "$ROOT/lib/rdp.sh"
+# shellcheck source=lib/paths.sh
+source "$ROOT/lib/paths.sh"
+# shellcheck source=lib/launch.sh
+source "$ROOT/lib/launch.sh"
+# shellcheck source=lib/guest.sh
+source "$ROOT/lib/guest.sh"
+# shellcheck source=lib/apps.sh
+source "$ROOT/lib/apps.sh"
+# shellcheck source=lib/doctor.sh
+source "$ROOT/lib/doctor.sh"
+# shellcheck source=lib/setup.sh
+source "$ROOT/lib/setup.sh"
+
+have jq || die "jq is missing; install it with: omarchy pkg add jq"
+
+trap launch_cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+case "${1:-}" in
+"" | help | -h | --help) usage ;;
+version | --version) version ;;
+apps) cmd_apps "${2:-}" ;;
+scan) shift; cmd_scan "$@" ;;
+add) shift; cmd_add "$@" ;;
+remove | rm) cmd_remove "${2:-}" ;;
+manage) cmd_manage ;;
+icons) shift; cmd_icons "$@" ;;
+sync) cmd_sync "${2:-}" ;;
+state) cmd_state ;;
+status) cmd_status ;;
+start) cmd_start ;;
+stop) cmd_stop ;;
+idle) cmd_idle "${2:-}" ;;
+shares) cmd_shares ;;
+share) shift; cmd_share "$@" ;;
+run) shift; cmd_run "$@" ;;
+open) shift; cmd_open "$@" ;;
+explorer) shift; cmd_explorer "$@" ;;
+desktop) cmd_desktop ;;
+setup) shift; cmd_setup "$@" ;;
+doctor) shift; cmd_doctor "$@" ;;
+passwordless) cmd_passwordless "${2:-status}" ;;
+logs) cmd_logs "${2:-}" ;;
+uninstall) shift; cmd_uninstall "$@" ;;
+__idle) cmd___idle "${2:-}" "${3:-0}" ;;
+-*) die "unknown option: $1 (see: winapp help)" ;;
+*) cmd_app "$@" ;;
+esac

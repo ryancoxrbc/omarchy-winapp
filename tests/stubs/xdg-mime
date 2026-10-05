@@ -1,0 +1,2 @@
+#!/bin/bash
+echo "$(basename "$0") $*" >>"${STUB_OUT:?}/desktop.calls"

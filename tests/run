@@ -1,0 +1,473 @@
+#!/bin/bash
+# Tests for winapp. No VM, Docker or FreeRDP needed: the commands winapp calls
+# are replaced by the stand-ins in tests/stubs, and everything it writes goes
+# under a temporary home.
+#
+#   tests/run            run everything
+#   tests/run paths      run the groups whose name contains "paths"
+
+# Each group runs in a subshell and reports its failures through its exit
+# status; "check && pass || fail" is how the one-line checks are written.
+# shellcheck disable=SC2015,SC2030,SC2031,SC2034,SC2088,SC2329
+
+set -u
+
+HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+ROOT=$(dirname -- "$HERE")
+WINAPP=$ROOT/bin/winapp
+ONLY=${1:-}
+
+TMP=$(mktemp -d)
+trap 'pkill -P $$ 2>/dev/null; rm -rf "$TMP"' EXIT
+
+failed=0
+
+pass() { :; }
+fail() {
+  failed=$((failed + 1))
+  printf '  FAIL %s\n' "$1"
+  [[ -z ${2:-} ]] || printf '       %s\n' "${2//$'\n'/$'\n'       }"
+}
+is() { # is <what> <actual> <expected>
+  if [[ $2 == "$3" ]]; then pass; else fail "$1" "expected: $3"$'\n'"  actual: $2"; fi
+}
+has() { # has <what> <text> <fragment>
+  if [[ $2 == *"$3"* ]]; then pass; else fail "$1" "missing: $3"$'\n'"     in: $2"; fi
+}
+lacks() {
+  if [[ $2 != *"$3"* ]]; then pass; else fail "$1" "unexpected: $3"; fi
+}
+succeeds() { # succeeds <what> <command...>
+  local what=$1 out
+  shift
+  if out=$( ("$@") 2>&1); then pass; else fail "$what" "$out"; fi
+}
+refuses() { # refuses <what> <command...>: must exit non-zero
+  local what=$1
+  shift
+  if ("$@") >/dev/null 2>&1; then fail "$what" "it succeeded"; else pass; fi
+}
+
+# A clean world for each group: empty home, VM installed, Docker reachable.
+fresh() {
+  rm -rf "$TMP/world"
+  export HOME=$TMP/world/home
+  export XDG_CONFIG_HOME=$HOME/.config XDG_DATA_HOME=$HOME/.local/share
+  export XDG_CACHE_HOME=$HOME/.cache XDG_STATE_HOME=$HOME/.local/state
+  export XDG_RUNTIME_DIR=$TMP/world/run
+  export STUB_OUT=$TMP/world/stub
+  export WINAPP_VM_DIR=$TMP/world/vm
+  export WINAPP_VM_HELPER=$TMP/world/omarchy-windows-vm
+  export OMARCHY_DOCKER_SOCKET=$TMP/world/docker.sock
+  export PATH=$HERE/stubs:$ORIGINAL_PATH
+  unset WINAPP_CONFIG_DIR WINAPP_RUN_DIR
+  mkdir -p "$HOME/Documents" "$HOME/.windows" "$HOME/Windows" "$HOME/.config/windows" \
+    "$XDG_RUNTIME_DIR" "$STUB_OUT" "$WINAPP_VM_DIR"
+  chmod 700 "$XDG_RUNTIME_DIR"
+  export WINAPP_RDP_PORT=$LISTEN_PORT
+  : >"$WINAPP_VM_DIR/docker-compose.yml"
+  : >"$OMARCHY_DOCKER_SOCKET"
+  printf 'USERNAME=tester\nPASSWORD=p=ss w"rd\n' >"$HOME/.config/windows/credentials"
+  cat >"$WINAPP_VM_HELPER" <<'EOF'
+#!/bin/bash
+echo "helper $*" >>"$STUB_OUT/helper.calls"
+[[ -e $STUB_OUT/helper.fail ]] && exit 126 # the password prompt was dismissed
+[[ $1 == stop ]] && rm -f "$STUB_OUT/vm-running"
+exit 0
+EOF
+  chmod +x "$WINAPP_VM_HELPER"
+}
+ORIGINAL_PATH=$PATH
+
+# Something to connect to where the guest's RDP port would be.
+exec {listener}< <(python3 -c '
+import socket, sys, time
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+s.listen(64)
+print(s.getsockname()[1], flush=True)
+time.sleep(3600)')
+read -r LISTEN_PORT <&"$listener"
+
+# Load winapp's functions into this shell for the groups that test them directly.
+load() {
+  SELF=$WINAPP
+  # shellcheck source=/dev/null
+  for lib in common config vm rdp paths launch guest apps doctor setup; do source "$ROOT/lib/$lib.sh"; done
+}
+
+group() { # group <name>: true when this group should run
+  [[ -z $ONLY || $1 == *"$ONLY"* ]] || return 1
+  printf '%s\n' "$1"
+  fresh
+}
+
+# -------------------------------------------------------------------------------
+if group "paths: Linux files as Windows sees them"; then (
+  failed=0
+  load
+  mkdir -p "$HOME/Documents/Client's files, 2026" "$TMP/world/usb/job" "$HOME/Projects"
+  touch "$HOME/Documents/a.docx" "$HOME/Documents/Client's files, 2026/ünïcode – plan.cdr" "$TMP/world/usb/job/sign.cdr"
+
+  is "a file under home" "$(win_path "$HOME/Documents/a.docx")" '\\tsclient\home\Documents\a.docx'
+  is "apostrophe, comma and non-ASCII survive" "$(win_path "$HOME/Documents/Client's files, 2026/ünïcode – plan.cdr")" \
+    '\\tsclient\home\Documents\Client'"'"'s files, 2026\ünïcode – plan.cdr'
+  is "the share root itself" "$(win_path "$HOME")" '\\tsclient\home'
+
+  cmd_share add work "$HOME/Projects" >/dev/null
+  touch "$HOME/Projects/p.sldprt"
+  is "the deepest share wins" "$(win_path "$HOME/Projects/p.sldprt")" '\\tsclient\work\p.sldprt'
+  is "shares are stored relative to home" "$(cfg_json | jq -r '.shares[] | select(.name == "work") | .path')" '~/Projects'
+
+  outside=$(win_path "$TMP/world/usb/job/sign.cdr")
+  has "a file outside every share gets its own drive" "$outside" '\\tsclient\x'
+  has "…named after the file" "$outside" '\sign.cdr'
+  is "…and the same drive next time" "$(win_path "$TMP/world/usb/job/sign.cdr")" "$outside"
+  has "…which later connections redirect again" "$(drive_args)" ",$TMP/world/usb/job"
+
+  ln -s "$TMP/world/usb" "$HOME/Documents/stick"
+  is "a symlink inside a share is reached through the share" "$(win_path "$HOME/Documents/stick/job/sign.cdr")" \
+    '\\tsclient\home\Documents\stick\job\sign.cdr'
+
+  is "file:// URIs are decoded" "$(local_path "file://$HOME/Documents/Client%27s%20files%2C%202026")" "$HOME/Documents/Client's files, 2026"
+  refuses "a missing file is refused" local_path "$HOME/Documents/nope.docx"
+
+  touch "$HOME/Documents/what?.txt" "$HOME/Documents/trailing. "
+  refuses "a name Windows cannot spell is refused" win_path "$HOME/Documents/what?.txt"
+  refuses "…as is one ending in a space" win_path "$HOME/Documents/trailing. "
+
+  odd="$HOME/Sam's, stuff"
+  mkdir -p "$odd"
+  cmd_share add odd "$odd" >/dev/null
+  args=$(drive_args)
+  lacks "a folder FreeRDP's parser cannot carry is not passed as is" "$args" "$odd"
+  has "…but through a plainly named link" "$args" "/drive:odd,$RUN_DIR/drives/odd"
+  is "…that points at it" "$(readlink "$RUN_DIR/drives/odd")" "$odd"
+
+  refuses "the share name winapp is reserved" cmd_share add winapp "$HOME"
+  refuses "a share needs an existing folder" cmd_share add nope "$HOME/nope"
+  cmd_share remove odd >/dev/null
+  lacks "a removed share is gone" "$(cmd_shares)" "odd"
+  exit $failed
+); failed=$((failed + $?)); fi
+
+# -------------------------------------------------------------------------------
+if group "apps: the list, menu entries and file types"; then (
+  failed=0
+  succeeds "add with --exe" "$WINAPP" add coreldraw --exe 'C:\Program Files\Corel\Programs64\CorelDRW.exe' \
+    --name "CorelDRAW 2024" --ext cdr,.QZX9 --opens svg --icon "$ROOT/tests/fixtures/icon.png" --default
+  entry=$(cat "$XDG_DATA_HOME/applications/winapp-coreldraw.desktop")
+  has "the menu entry is named" "$entry" "Name=CorelDRAW 2024"
+  has "…and opens files through winapp" "$entry" "\" coreldraw %F"
+  has "…and lists its file types" "$entry" "MimeType="
+  has "an unknown extension gets a private type" "$entry" "application/x-winapp-qzx9"
+  has "…registered for that extension" "$(cat "$XDG_DATA_HOME/mime/packages/winapp-qzx9.xml")" '<glob pattern="*.qzx9"/>'
+  has "--default claims the app's own types" "$(cat "$STUB_OUT/desktop.calls")" "xdg-mime default winapp-coreldraw.desktop"
+  lacks "…but not the ones it merely can open" "$(grep 'xdg-mime default' "$STUB_OUT/desktop.calls")" "svg"
+  is "extensions are normalised" "$("$WINAPP" apps --json | jq -c '.apps[0].ext')" '["cdr","qzx9"]'
+
+  succeeds "add again updates in place" "$WINAPP" add coreldraw --label Corel --no-default --icon "$ROOT/tests/fixtures/icon.png"
+  is "…keeping what was not mentioned" "$("$WINAPP" apps --json | jq -r '.apps | length, .[0].exe, .[0].label, .[0].default')" \
+    $'1\nC:\\Program Files\\Corel\\Programs64\\CorelDRW.exe\nCorel\nfalse'
+
+  # Omarchy's Microsoft web apps go by the real programs' names
+  "$WINAPP" add word --exe 'C:\Office\WINWORD.EXE' --name "Microsoft Word" --ext docx --icon "$ROOT/tests/fixtures/icon.png" >/dev/null 2>&1
+  has "a name nobody else uses is left alone" "$(cat "$XDG_DATA_HOME/applications/winapp-word.desktop")" $'\nName=Microsoft Word\n'
+  printf '[Desktop Entry]\nName=Microsoft Word\nExec=omarchy-launch-webapp https://word.cloud.microsoft/\n' >"$XDG_DATA_HOME/applications/Microsoft Word.desktop"
+  "$WINAPP" state >/dev/null # the bar's poll is what notices the newcomer
+  for _ in $(seq 50); do grep -q '(Windows)' "$XDG_DATA_HOME/applications/winapp-word.desktop" && break; sleep 0.1; done
+  has "a name another launcher took gets told apart, by itself" "$(cat "$XDG_DATA_HOME/applications/winapp-word.desktop")" $'\nName=Microsoft Word (Windows)\n'
+  has "…while the other entry is untouched" "$(cat "$XDG_DATA_HOME/applications/Microsoft Word.desktop")" "omarchy-launch-webapp"
+  has "…and other apps keep their plain names" "$(cat "$XDG_DATA_HOME/applications/winapp-coreldraw.desktop")" $'\nName=CorelDRAW 2024\n'
+  is "the panel keeps the plain name" "$("$WINAPP" state | jq -r '.apps[] | select(.id == "word") | .name')" "Microsoft Word"
+  rm "$XDG_DATA_HOME/applications/Microsoft Word.desktop"
+  "$WINAPP" sync >/dev/null
+  has "…and the plain name returns when the other entry goes" "$(cat "$XDG_DATA_HOME/applications/winapp-word.desktop")" $'\nName=Microsoft Word\n'
+  "$WINAPP" add word --no-menu --icon "$ROOT/tests/fixtures/icon.png" >/dev/null 2>&1
+  entry=$(cat "$XDG_DATA_HOME/applications/winapp-word.desktop")
+  has "--no-menu hides the entry from the launcher" "$entry" "NoDisplay=true"
+  has "…but it still opens its file types" "$entry" "MimeType="
+  "$WINAPP" remove word >/dev/null
+
+  refuses "an id that is a command is refused" "$WINAPP" add scan --exe 'C:\x.exe'
+  refuses "an id with a space is refused" "$WINAPP" add "my app" --exe 'C:\x.exe'
+
+  has "state lists the app for the bar" "$("$WINAPP" state | jq -c '.apps')" '"id":"coreldraw"'
+  succeeds "--no-panel hides it there" "$WINAPP" add coreldraw --no-panel --icon "$ROOT/tests/fixtures/icon.png"
+  is "…and state leaves it out" "$("$WINAPP" state | jq -c '.apps')" '[]'
+
+  printf '[Default Applications]\napplication/x-winapp-qzx9=winapp-coreldraw.desktop;\nimage/png=imv.desktop;winapp-coreldraw.desktop;\n' >"$XDG_CONFIG_HOME/mimeapps.list"
+  succeeds "remove" "$WINAPP" remove coreldraw
+  [[ ! -e $XDG_DATA_HOME/applications/winapp-coreldraw.desktop ]] && pass || fail "remove deletes the menu entry"
+  [[ ! -e $XDG_DATA_HOME/mime/packages/winapp-qzx9.xml ]] && pass || fail "remove deletes the private file type"
+  is "remove takes it out of the association file, and only it" "$(cat "$XDG_CONFIG_HOME/mimeapps.list")" \
+    $'[Default Applications]\nimage/png=imv.desktop;'
+  refuses "removing an unknown app is an error" "$WINAPP" remove coreldraw
+  exit $failed
+); failed=$((failed + $?)); fi
+
+# -------------------------------------------------------------------------------
+if group "scan: matching installed programs to the catalog"; then (
+  failed=0
+  load
+  mkdir -p "$CACHE_DIR"
+  cp "$ROOT/tests/fixtures/scan.json" "$SCAN_FILE"
+  list=$(installed)
+  is "known programs first, then by name" "$(jq -r 'map(.id) | join(" ")' <<<"$list")" \
+    "affinity-photo coreldraw word discord photo-booth-pro run-app sign-cutter-5"
+  is "a catalog app keeps its own file types, not Windows' list" "$(jq -c '.[] | select(.id == "word") | .ext' <<<"$list")" \
+    '["docx","doc","docm","dotx","dotm"]'
+  is "the Start Menu name is used when it says more" "$(jq -r '.[] | select(.id == "coreldraw") | .name' <<<"$list")" "CorelDRAW 2024"
+  is "…and the catalog's when it does not" "$(jq -r '.[] | select(.id == "word") | .name' <<<"$list")" "Microsoft Word"
+  is "one entry per program: the plain shortcut" "$(jq -r '.[] | select(.id == "coreldraw") | .args' <<<"$list")" ""
+  is "pathContains tells Affinity's Photo.exe from another" "$(jq -r '.[] | select(.exe | test("Booth")) | .known' <<<"$list")" "false"
+  is "an unknown program keeps its shortcut's arguments" "$(jq -r '.[] | select(.id == "discord") | .args' <<<"$list")" "--processStart Discord.exe"
+  is "…and the file types Windows registered" "$(jq -c '.[] | select(.id == "sign-cutter-5") | .ext' <<<"$list")" '["scut","plt"]'
+  lacks "uninstallers are left out" "$list" "Uninstall"
+  lacks "Windows' own tools are left out" "$list" "charmap"
+  has "…unless everything is asked for" "$(installed all)" "charmap"
+  is "an id that would shadow a command is renamed" "$(jq -r '.[] | select(.name == "Run") | .id' <<<"$list")" "run-app"
+
+  "$WINAPP" add sign-cutter-5 --icon "$ROOT/tests/fixtures/icon.png" >/dev/null 2>&1
+  is "add <id> takes the program from the scan" "$("$WINAPP" apps --json | jq -r '.apps[0] | .exe, (.ext | join(","))')" \
+    $'C:\\Program Files\\SignCutter\\cutter.exe\nscut,plt'
+  is "…and the scan then shows it as added" "$(installed | jq -r '.[] | select(.id == "sign-cutter-5") | .added')" "true"
+  exit $failed
+); failed=$((failed + $?)); fi
+
+# -------------------------------------------------------------------------------
+if group "launch: starting the VM and an app"; then (
+  failed=0
+  mkdir -p "$HOME/Documents"
+  doc="$HOME/Documents/Sam's report, final.docx"
+  touch "$doc"
+  "$WINAPP" add word --exe 'C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE' --name "Microsoft Word" \
+    --args '/q' --icon "$ROOT/tests/fixtures/icon.png" >/dev/null 2>&1
+  : >"$STUB_OUT/window-open"
+
+  is "state before: stopped" "$("$WINAPP" state | jq -r .vm)" "stopped"
+  "$WINAPP" word "$doc" >"$STUB_OUT/launch.out" 2>&1 &
+  launcher=$!
+  for _ in $(seq 100); do [[ -s $STUB_OUT/launch.rdp ]] && break; sleep 0.1; done
+
+  # Docker is reachable but the bind anchors are not mounted, as after a reboot
+  has "the VM was started through Omarchy's helper" "$(cat "$STUB_OUT/pkexec.calls")" "$WINAPP_VM_HELPER __priv up_wait"
+  rdp=$(cat "$STUB_OUT/launch.rdp" 2>/dev/null)
+  has "the program travels in the connection file" "$rdp" 'remoteapplicationprogram:s:C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE'
+  has "…with fixed arguments and the quoted file, apostrophe and comma intact" "$rdp" \
+    'remoteapplicationcmdline:s:/q "\\tsclient\home\Documents\Sam'"'"'s report, final.docx"'
+  args=$(cat "$STUB_OUT/client.args" 2>/dev/null)
+  has "credentials go in over stdin" "$args" '/u:tester'
+  has "…with = and quotes in the password intact" "$args" '/p:p=ss w"rd'
+  has "home is redirected" "$args" "/drive:home,$HOME"
+  has "the app windows carry winapp's class" "$args" "/wm-class:winapp"
+  is "…and the command line carries nothing else" "$(cat "$STUB_OUT/client.argv")" "/args-from:stdin"
+
+  sleep 1.5
+  state=$("$WINAPP" state)
+  is "state while open: running" "$(jq -r .vm <<<"$state")" "running"
+  is "…with one window" "$(jq -r .windows <<<"$state")" "1"
+  is "…and no countdown" "$(jq -r .idleDeadline <<<"$state")" "0"
+
+  rm -f "$STUB_OUT/window-open" # the user closes the app
+  wait "$launcher"
+  is "the launcher ends cleanly once the window is gone" "$?" "0"
+  is "…without complaint" "$(cat "$STUB_OUT/launch.out")" ""
+  [[ ! -d /proc/$(cat "$STUB_OUT/client.pid") ]] && pass || fail "the client is disconnected"
+  state=$("$WINAPP" state)
+  [[ $(jq -r .idleDeadline <<<"$state") -gt $(date +%s) ]] && pass || fail "the idle countdown starts" "$state"
+
+  succeeds "stop" "$WINAPP" stop
+  is "state after stop: stopped" "$("$WINAPP" state | jq -r .vm)" "stopped"
+  [[ ! -e $XDG_RUNTIME_DIR/winapp/idle ]] && pass || fail "stopping cancels the countdown"
+
+  printf '[ERROR] RAIL exec error: execResult=RAIL_EXEC_E_FILE_NOT_FOUND [0x5]\n' >"$STUB_OUT/client.fail"
+  out=$("$WINAPP" run 'C:\gone\app.exe' 2>&1)
+  is "a program Windows cannot start is an error" "$?" "1"
+  has "…that says what to do" "$out" "winapp scan"
+  rm -f "$STUB_OUT/client.fail"
+
+  # Windows shows its desktop or single apps, never both
+  "$WINAPP" desktop >/dev/null 2>&1 &
+  desk=$!
+  for _ in $(seq 100); do [[ -s $XDG_RUNTIME_DIR/winapp/desktop.pid ]] && break; sleep 0.1; done
+  is "state reports an open desktop" "$("$WINAPP" state | jq -r .desktop)" "true"
+  out=$("$WINAPP" word "$doc" 2>&1)
+  is "an app is refused while the desktop is open" "$?" "1"
+  has "…and says what to close" "$out" "Close the desktop window first"
+  refuses "…as is a second desktop" "$WINAPP" desktop
+  kill "$(cat "$XDG_RUNTIME_DIR/winapp/desktop.pid")"
+  wait "$desk"
+  is "state after the desktop closes" "$("$WINAPP" state | jq -r .desktop)" "false"
+
+  refuses "an unknown app is an error" "$WINAPP" nosuchapp
+  refuses "a missing file is an error" "$WINAPP" word "$HOME/Documents/missing.docx"
+  "$WINAPP" stop >/dev/null 2>&1
+  exit $failed
+); failed=$((failed + $?)); fi
+
+# -------------------------------------------------------------------------------
+if group "access: with and without Docker"; then (
+  failed=0
+  load
+  log=$TMP/world/vm.log
+  : >"$STUB_OUT/docker.calls"
+
+  # Docker reachable, but the bind anchors are missing (as after a reboot):
+  # plain compose would boot an empty disk, so it has to go through the helper.
+  vm_start "$log"
+  has "missing anchors send the start through Omarchy's helper" "$(cat "$STUB_OUT/pkexec.calls")" "$WINAPP_VM_HELPER __priv up_wait"
+  lacks "…and never through compose" "$(cat "$STUB_OUT/docker.calls")" "up -d"
+  (
+    anchors_ready() { return 0; }
+    vm_start "$log"
+  )
+  has "with the anchors in place compose starts it directly" "$(cat "$STUB_OUT/docker.calls")" "docker-compose -f $COMPOSE up -d"
+
+  rm -f "$OMARCHY_DOCKER_SOCKET" "$STUB_OUT"/*.calls "$STUB_OUT/vm-running"
+  port_open() { [[ -e $STUB_OUT/vm-running ]]; } # stands in for the published port
+  docker_direct && fail "without the socket Docker is not reachable" || pass
+  is "stopped is seen without Docker" "$(vm_state)" "stopped"
+  vm_start "$log"
+  has "the start asks polkit" "$(cat "$STUB_OUT/pkexec.calls")" "__priv up_wait"
+  is "running is seen without Docker" "$(vm_state)" "running"
+  first=$(vm_boot_id)
+  is "the boot id is stable while it runs" "$(vm_boot_id)" "$first"
+  vm_stop
+  has "the stop goes through the helper's own command" "$(cat "$STUB_OUT/helper.calls")" "helper stop"
+  vm_note_stopped
+  : >"$STUB_OUT/vm-running"
+  [[ $(vm_boot_id) != "$first" ]] && pass || fail "a new boot has a new id"
+
+  # a dismissed password prompt: Windows keeps running and stays on the timer
+  : >"$STUB_OUT/helper.fail"
+  out=$( (cmd_stop) 2>&1)
+  is "a stop that was not authorized is an error" "$?" "1"
+  has "…that says what probably happened" "$out" "password prompt"
+  is "…and Windows is still seen as running" "$(vm_state)" "running"
+  [[ -s $RUN_DIR/idle ]] && pass || fail "…and still due to stop when idle"
+  idle_cancel
+  rm -f "$STUB_OUT/helper.fail"
+  [[ ! -e $STUB_OUT/docker.calls ]] && pass || fail "Docker is never called without access" "$(cat "$STUB_OUT/docker.calls" 2>/dev/null)"
+
+  rule=$(polkit_rule)
+  has "the polkit rule names the helper" "$rule" "action.lookup(\"program\") == \"$WINAPP_VM_HELPER\""
+  if command -v node >/dev/null; then
+    verdict() { # verdict <user> <program> <command line>
+      node -e '
+        let rule; const polkit = { addRule: f => rule = f, Result: { YES: "yes" } };
+        eval(require("fs").readFileSync(0, "utf8"));
+        const [user, program, command] = process.argv.slice(1);
+        const action = { id: "org.freedesktop.policykit.exec", lookup: k => ({ program, command_line: command })[k] };
+        console.log(rule(action, { user }) || "ask");' "$@" <<<"$rule"
+    }
+    h=$WINAPP_VM_HELPER
+    is "the rule waives the prompt for starting" "$(verdict "$ME" "$h" "$h __priv up_wait")" "yes"
+    is "…and for stopping" "$(verdict "$ME" "$h" "$h __priv down")" "yes"
+    is "…but not for removing the VM" "$(verdict "$ME" "$h" "$h __priv remove")" "ask"
+    is "…or rewriting its configuration" "$(verdict "$ME" "$h" "$h __priv write_compose")" "ask"
+    is "…or with anything appended" "$(verdict "$ME" "$h" "$h __priv down; rm -rf /")" "ask"
+    is "…or for another program" "$(verdict "$ME" /usr/bin/bash "/usr/bin/bash __priv down")" "ask"
+    is "…or for another user" "$(verdict somebody "$h" "$h __priv down")" "ask"
+  fi
+  exit $failed
+); failed=$((failed + $?)); fi
+
+# -------------------------------------------------------------------------------
+if group "settings and failure messages"; then (
+  failed=0
+  load
+  echo 15 >"$TMP/idle" && mkdir -p "$CONFIG_DIR" && cp "$TMP/idle" "$CONFIG_DIR/idle-minutes"
+  is "the 1.x idle setting is carried over" "$(idle_minutes)" "15"
+  [[ ! -e $CONFIG_DIR/idle-minutes ]] && pass || fail "…and its old file removed"
+  "$WINAPP" idle 0
+  is "idle 0 means never" "$("$WINAPP" state | jq -r .idleMinutes)" "0"
+  refuses "idle wants a number" "$WINAPP" idle soon
+
+  rdp_credentials
+  is "the password keeps its = and quotes" "$RDP_PASS" 'p=ss w"rd'
+  rm "$CREDENTIALS"
+  printf '      USERNAME: "docker"\n      PASSWORD: "a\\"b$$c\\\\d"\n' >"$COMPOSE"
+  rdp_credentials
+  is "without a credentials file the compose value is unescaped" "$RDP_PASS" 'a"b$c\d'
+
+  log=$TMP/world/client.log
+  echo "Logon Error Info LOGON_FAILED_OTHER [LOGON_MSG_BUMP_OPTIONS]" >"$log"
+  is "a refused single-app logon is recognised" "$(rdp_failure "$log")" "bump"
+  echo "ERRINFO_RPC_INITIATED_DISCONNECT (0x00000001)" >"$log"
+  is "being replaced by a newer connection is recognised" "$(rdp_failure "$log")" "replaced"
+  echo "ERRCONNECT_LOGON_FAILURE [0x00020014]" >"$log"
+  is "a wrong password is recognised" "$(rdp_failure "$log")" "auth"
+
+  STUB_SCALE=1.6
+  export STUB_SCALE
+  is "a 160% monitor asks Windows for 140% rendering" "$(scale_args | tr '\n' ' ')" "/scale:140 /scale-desktop:160 "
+  STUB_SCALE=1
+  is "no scaling arguments at 100%" "$(scale_args)" ""
+
+  rm -rf "$WINAPP_VM_DIR"
+  is "no VM: state says so" "$("$WINAPP" state | jq -r .installed)" "false"
+  refuses "…and starting is an error" "$WINAPP" start
+  exit $failed
+); failed=$((failed + $?)); fi
+
+# -------------------------------------------------------------------------------
+if group "setup and uninstall"; then (
+  failed=0
+  mkdir -p "$HOME/.local/bin"
+  echo "an older script" >"$HOME/.local/bin/winapp"
+  out=$("$WINAPP" setup --yes --no-scan 2>&1)
+  is "setup succeeds" "$?" "0"
+  is "the command is linked onto PATH" "$(realpath "$HOME/.local/bin/winapp")" "$WINAPP"
+  is "a file that was in the way is kept" "$(cat "$XDG_DATA_HOME"/winapp/backup/winapp.*)" "an older script"
+  [[ -s $XDG_CONFIG_HOME/winapp/config.json && -s $XDG_CONFIG_HOME/winapp/apps.json ]] && pass || fail "setup writes the default settings"
+  lacks "nothing is asked of polkit when Docker is reachable" "$out" "password"
+  succeeds "setup can be run again" "$WINAPP" setup --yes --no-scan
+
+  "$WINAPP" add demo --exe 'C:\\demo.exe' --ext qzx9 --icon "$ROOT/tests/fixtures/icon.png" >/dev/null 2>&1
+  has "menu entries call the linked command" "$(cat "$XDG_DATA_HOME/applications/winapp-demo.desktop")" "Exec=\"$HOME/.local/bin/winapp\" demo %F"
+
+  succeeds "uninstall" "$WINAPP" uninstall --yes
+  [[ ! -e $HOME/.local/bin/winapp ]] && pass || fail "uninstall removes the link"
+  [[ -z $(ls "$XDG_DATA_HOME/applications"/winapp-* 2>/dev/null) ]] && pass || fail "uninstall removes the menu entries"
+  [[ ! -e $XDG_DATA_HOME/mime/packages/winapp-qzx9.xml ]] && pass || fail "uninstall removes the private file types"
+  [[ -s $XDG_CONFIG_HOME/winapp/apps.json ]] && pass || fail "uninstall keeps the app list"
+  [[ -d $XDG_DATA_HOME/winapp/backup ]] && pass || fail "uninstall keeps the file setup moved aside"
+  ln -s "$WINAPP" "$HOME/.local/bin/winapp"
+  succeeds "uninstall --purge" "$WINAPP" uninstall --yes --purge
+  [[ ! -e $XDG_CONFIG_HOME/winapp ]] && pass || fail "--purge removes the settings too"
+
+  rm -f "$WINAPP_VM_HELPER"
+  refuses "setup needs Omarchy's Windows VM support" "$WINAPP" setup --yes --no-scan
+  exit $failed
+); failed=$((failed + $?)); fi
+
+# -------------------------------------------------------------------------------
+if group "repository: catalog, manifest and scripts"; then (
+  failed=0
+  load
+  succeeds "catalog.json is valid JSON" jq -e . "$ROOT/catalog.json"
+  is "catalog ids are unique" "$(jq -r '.apps | map(.id) | group_by(.) | map(select(length > 1) | .[0]) | join(" ")' "$ROOT/catalog.json")" ""
+  is "catalog ids are usable as app ids" "$(jq -r --arg c "$COMMANDS" '.apps[] | select((.id | test("^[a-z0-9][a-z0-9_.+-]*$") | not) or (.id | test("^(" + $c + ")$"))) | .id' "$ROOT/catalog.json")" ""
+  is "catalog executables are lower case" "$(jq -r '.apps[].exe[] | select(. != ascii_downcase)' "$ROOT/catalog.json")" ""
+  is "catalog extensions are bare and lower case" "$(jq -r '.apps[] | ((.ext // []) + (.opens // []))[] | select(test("^[a-z0-9_+-]+$") | not)' "$ROOT/catalog.json")" ""
+  is "every catalog app has a name and a program" "$(jq -r '.apps[] | select((.name // "") == "" or ((.exe // []) | length) == 0) | .id' "$ROOT/catalog.json")" ""
+
+  id=$(jq -r .id "$ROOT/manifest.json")
+  has "the panel registers under the manifest's id" "$(cat "$ROOT/Panel.qml")" "moduleName: \"$id\""
+  has "…for IPC too" "$(cat "$ROOT/Panel.qml")" "ipcTarget: \"$id\""
+  [[ -f $ROOT/$(jq -r .entryPoints.barWidget "$ROOT/manifest.json") ]] && pass || fail "the manifest's entry point exists"
+  has "the changelog covers the manifest's version" "$(cat "$ROOT/CHANGELOG.md" 2>/dev/null)" "## $(jq -r .version "$ROOT/manifest.json")"
+  is "no symlinks (Omarchy refuses plugins that have any)" "$(find "$ROOT" -name .git -prune -o -type l -print)" ""
+  [[ -x $ROOT/setup && -x $WINAPP ]] && pass || fail "setup and bin/winapp are executable"
+  has "help lists every command group" "$("$WINAPP" help)" "winapp manage"
+  is "version comes from the manifest" "$("$WINAPP" version)" "$(jq -r .version "$ROOT/manifest.json")"
+  exit $failed
+); failed=$((failed + $?)); fi
+
+echo
+if ((failed)); then
+  echo "$failed check(s) failed"
+  exit 1
+fi
+echo "all checks passed"
