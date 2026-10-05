@@ -92,14 +92,18 @@ go wrong on a compositor like Hyprland:
 - xfreerdp labels them as dialogs, and Hyprland gives keyboard focus to
   unmanaged windows of that type. xfreerdp answers focus by telling Windows to
   activate the hidden window.
-- When X11 programs are scaled (anything but 1x: always at a fractional scale,
-  for odd sizes at 2x), a window's geometry comes back from the compositor
-  rounded by a pixel, and xfreerdp reports that to Windows as the user having
-  resized the window. A window Windows keeps at 0x0 ends up 21x21 and visible.
+- xfreerdp reports whatever geometry the compositor gives such a window back
+  to Windows as the user having resized it. Hyprland does not leave a window
+  smaller than 20 pixels, and when it scales X11 programs it also rounds
+  geometry by a pixel. A helper window that Windows keeps at 0x0 ends up 20x20
+  (21x21 at a fractional scale) and visible; a menu can come back a pixel
+  wider.
 
 A program does not expect either to happen to a window it hides. One with an
 Internet Explorer control, CorelDRAW's welcome screen for instance, answers by
-spinning its UI thread: "Not Responding", for good.
+spinning its UI thread: "Not Responding", for good. It happens the moment the
+resize is relayed, which can be at start-up or minutes later, when some other
+window opens.
 
 `shim/xshim.c` is about a hundred lines of C that winapp loads into xfreerdp
 (`LD_PRELOAD`). For unmanaged windows only, it changes the label to the one

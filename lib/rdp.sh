@@ -46,7 +46,7 @@ compose_value() {
 # --- the helper-window fix ---------------------------------------------------
 # shim/xshim.c explains what it corrects in xfreerdp and why: without it,
 # programs with an embedded Internet Explorer control (CorelDRAW's welcome
-# screen) freeze on any display that is not scaled 1x. It is a few lines of C
+# screen) freeze, at start-up or some time later. It is a few lines of C
 # loaded into the client, so it is built here, from the source in the plugin,
 # the first time it is needed and again whenever that source changes.
 SHIM_SOURCE=$ROOT/shim/xshim.c

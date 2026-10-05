@@ -14,14 +14,18 @@
  *    windows of that type, and xfreerdp answers focus by telling Windows to
  *    activate the helper window.
  *
- * 2. When the compositor scales X11 clients (anything but 1x; always at a
- *    fractional scale, for odd sizes at 2x), a window's geometry comes back
- *    from it rounded by a pixel. xfreerdp reports that to Windows as the user
- *    having moved or resized the window.
+ * 2. It reports whatever geometry the compositor gives them back to Windows
+ *    as the user having moved or resized the window. Hyprland does not leave
+ *    a window smaller than 20 pixels, and when it scales X11 clients it also
+ *    rounds geometry by a pixel. So a helper window that Windows keeps at 0x0
+ *    is resized, on the Windows side, to 20x20 (21x21 at a fractional scale),
+ *    and a menu can come back a pixel wider than it was.
  *
  * A program does not expect either to happen to a window it hides. CorelDRAW's
  * welcome screen, or any program with an Internet Explorer control, answers by
  * spinning its UI thread: the window turns white, "Not Responding", for good.
+ * It happens the moment the resize is relayed, which can be at start-up or
+ * minutes later, when some other window opens.
  *
  * So, for override-redirect windows only: the type becomes DROPDOWN_MENU,
  * which is what xfreerdp itself first picks for them and which compositors do

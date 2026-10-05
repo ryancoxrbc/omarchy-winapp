@@ -14,9 +14,9 @@
 
 ### Fixed
 
-- Programs with an embedded Internet Explorer control froze at start-up
-  ("Not Responding", one CPU core pinned) on any display not scaled 1x, and
-  classic menus took keyboard focus when opened. CorelDRAW's welcome screen is
+- Programs with an embedded Internet Explorer control froze ("Not Responding",
+  one CPU core pinned), at start-up or some time later, and classic menus took
+  keyboard focus when opened. CorelDRAW's welcome screen is
   the best-known case (#1). The RDP client was activating and resizing windows
   that Windows programs keep hidden; a small library loaded into it
   (`shim/xshim.c`) now leaves those windows alone. It is built automatically
