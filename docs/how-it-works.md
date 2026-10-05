@@ -113,6 +113,10 @@ window is. Ordinary windows are untouched. It is compiled from the source in
 the plugin the first time an app is opened, and again when that source changes;
 `"helperWindowFix": false` in `config.json` switches it off.
 
+The behaviour is reported to FreeRDP as
+[FreeRDP/FreeRDP#13610](https://github.com/FreeRDP/FreeRDP/issues/13610); once
+a release with a fix is in use, the shim has nothing left to do and can go.
+
 ## Files are redirected, not shared
 
 FreeRDP's drive redirection makes a Linux folder appear in the session as
