@@ -42,6 +42,8 @@ Apps
 Windows
   winapp start | stop          boot the VM without an app / shut it down now
   winapp idle <minutes>        stop the VM this long after the last window (0 = never)
+  winapp resources [--ram <GB>] [--cores <n>]
+                               show, or change, the VM's memory and processors
   winapp status                what the VM is doing
 
 Folders
@@ -76,6 +78,8 @@ source "$ROOT/lib/launch.sh"
 source "$ROOT/lib/guest.sh"
 # shellcheck source=lib/apps.sh
 source "$ROOT/lib/apps.sh"
+# shellcheck source=lib/resources.sh
+source "$ROOT/lib/resources.sh"
 # shellcheck source=lib/doctor.sh
 source "$ROOT/lib/doctor.sh"
 # shellcheck source=lib/setup.sh
@@ -102,6 +106,7 @@ status) cmd_status ;;
 start) cmd_start ;;
 stop) cmd_stop ;;
 idle) cmd_idle "${2:-}" ;;
+resources) shift; cmd_resources "$@" ;;
 shares) cmd_shares ;;
 share) shift; cmd_share "$@" ;;
 run) shift; cmd_run "$@" ;;

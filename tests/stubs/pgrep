@@ -1,0 +1,4 @@
+#!/bin/bash
+# No VM runs in the tests, whatever the machine running them has going.
+[[ "$*" == *qemu-system* ]] && exit 1
+exec /usr/bin/pgrep "$@"

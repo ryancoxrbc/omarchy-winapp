@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ryancoxrbc.winapp",
   "name": "Windows Apps",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "author": "ryancoxrbc",
   "license": "MIT",
   "description": "Windows apps from the Omarchy Windows VM as ordinary windows, opening Linux files in place: launch apps, see the VM's state, start or stop it.",

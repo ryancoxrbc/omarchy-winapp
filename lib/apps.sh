@@ -18,7 +18,7 @@ MIME_DIR=$DATA_HOME/mime
 MIMEAPPS=${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list
 FALLBACK_ICON=application-x-executable
 MENU_STAMP=$CACHE_DIR/menu.stamp
-COMMANDS='run|open|explorer|desktop|apps|scan|add|remove|manage|icons|sync|start|stop|idle|status|state|shares|share|setup|doctor|uninstall|passwordless|logs|version|help'
+COMMANDS='run|open|explorer|desktop|apps|scan|add|remove|manage|icons|sync|start|stop|idle|resources|status|state|shares|share|setup|doctor|uninstall|passwordless|logs|version|help'
 
 ensure_apps() {
   [[ -s $APPS_FILE ]] && return 0

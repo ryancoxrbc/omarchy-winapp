@@ -34,6 +34,14 @@ are missing, which is why the first start after a reboot asks for a password
 even with sudoless Docker. And the "is it running" question is asked every few
 seconds by the bar, so it must never need a password: hence the port probe.
 
+Memory and processors are part of that compose file. `winapp resources`
+changes them by handing Omarchy's privileged writer the same full set of
+values its installer does (memory, processors, disk size, account, time zone),
+with only the first two altered. The disk size is read back from the compose
+file or, where that cannot be read, from the size of the disk image, and the
+command refuses rather than guess: dockur would take a larger figure as a
+request to grow the disk.
+
 ## Apps are RemoteApp sessions
 
 An app is started with FreeRDP in RemoteApp mode: one RDP connection that shows

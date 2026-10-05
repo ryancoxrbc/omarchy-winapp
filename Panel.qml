@@ -34,6 +34,7 @@ Panel {
   readonly property string glyphDesktop: String.fromCodePoint(0xF0379)
   readonly property string glyphApps: String.fromCodePoint(0xF003B)
   readonly property string glyphInstall: String.fromCodePoint(0xF01DA)
+  readonly property string glyphChip: String.fromCodePoint(0xF035B)
 
   // --- state, as reported by `winapp state` -----------------------------------
   property bool installed: true
@@ -45,6 +46,8 @@ Panel {
   property real clockOffset: 0         // helper clock minus ours, in seconds
   property int idleLeft: 0
   property var apps: []
+  property string ram: ""              // "16G", empty when not known
+  property string cores: ""
   property string lastError: ""
   // What was just asked for, until the helper's own state catches up.
   property string pending: ""          // "" | "start" | "stop"
@@ -75,6 +78,7 @@ Panel {
     for (var i = 0; i < apps.length; i++) list.push({ "kind": "app", "index": i })
     list.push({ "kind": "desktop" })
     list.push({ "kind": "manage" })
+    list.push({ "kind": "resources" })
     list.push({ "kind": "idle" })
     return list
   }
@@ -118,6 +122,7 @@ Panel {
     else if (row.kind === "app") launch(apps[row.index].id)
     else if (row.kind === "desktop") openDesktop()
     else if (row.kind === "manage") manageApps()
+    else if (row.kind === "resources") changeResources()
     else if (row.kind === "idle") setIdle(idleOptions[idleCursor].value)
     else if (row.kind === "install") installVm()
   }
@@ -160,6 +165,8 @@ Panel {
     vm = parsed.vm
     windows = parsed.windows || 0
     desktop = parsed.desktop === true
+    ram = String(parsed.ram || "")
+    cores = String(parsed.cores || "")
     idleMinutes = parsed.idleMinutes
     idleDeadline = parsed.idleDeadline || 0
     clockOffset = (parsed.now || 0) - Date.now() / 1000
@@ -228,6 +235,12 @@ Panel {
   }
 
   function manageApps() { inTerminal(shellQuote(win.command) + " manage") }
+  function changeResources() { inTerminal(shellQuote(win.command) + " resources --pick") }
+
+  function resourcesText() {
+    if (ram === "" || cores === "") return "How much of this computer Windows gets"
+    return ram.replace(/G$/, " GB") + " · " + cores + (cores === "1" ? " processor" : " processors")
+  }
   function installVm() { inTerminal("omarchy-windows-vm install && " + shellQuote(win.command) + " setup") }
 
   function startVm() {
@@ -363,6 +376,7 @@ Panel {
         if (t === "r" || t === "R") win.refresh()
         else if (t === "d" || t === "D") win.openDesktop()
         else if (t === "a" || t === "A") win.manageApps()
+        else if (t === "m" || t === "M") win.changeResources()
       }
 
       Flickable {
@@ -582,6 +596,15 @@ Panel {
                 title: "Add or remove apps"
                 subtitle: "Pick from what is installed in Windows"
                 onActivated: win.manageApps()
+              }
+
+              ActionRow {
+                width: parent.width
+                kind: "resources"
+                glyph: win.glyphChip
+                title: "Memory and processors"
+                subtitle: win.resourcesText()
+                onActivated: win.changeResources()
               }
             }
           }

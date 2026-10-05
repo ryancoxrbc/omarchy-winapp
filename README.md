@@ -132,13 +132,30 @@ Click the Windows icon in the bar, or bind a key to
 | An app | Open it. Boots Windows first if needed. |
 | Windows desktop | The full desktop, for installing programs and changing settings. |
 | Add or remove apps | The checklist of installed programs. |
+| Memory and processors | How much of this computer Windows gets. |
 | Stop when idle for | How long the VM stays up after the last app closes. |
 
 Keyboard: `↑` `↓` or `j` `k` to move, `Enter` to activate, `←` `→` on the idle
-row, `d` for the desktop, `a` to add apps, `r` to refresh, `Esc` to close.
+row, `d` for the desktop, `a` to add apps, `m` for memory and processors, `r` to
+refresh, `Esc` to close.
 
 The icon can be hidden while Windows is off, in Setup > Plugins or with
 `omarchy bar set ryancoxrbc.winapp hideWhenStopped true --json`.
+
+## Memory and processors
+
+Windows gets the memory and processors you chose when you installed the VM. To
+change them, use *Memory and processors* in the panel, or:
+
+```bash
+winapp resources                     # what it has now, and what this computer has
+winapp resources --ram 8 --cores 4   # either option alone works too
+```
+
+This rewrites the VM's configuration through Omarchy's own helper, so it asks
+for your password once. Windows apps have to be closed, and the new values
+apply the next time Windows starts. The disk and everything on it are left
+exactly as they are.
 
 ## Passwords
 
@@ -174,6 +191,7 @@ winapp apps                  list your apps       winapp icons   refetch icons
 
 winapp start | stop | status
 winapp idle <minutes>        0 = never stop by itself
+winapp resources [--ram <GB>] [--cores <n>]   the VM's memory and processors
 winapp shares | share add <name> <folder> | share remove <name>
 
 winapp setup | doctor [--deep] | logs | passwordless on|off | uninstall

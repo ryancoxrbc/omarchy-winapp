@@ -343,7 +343,7 @@ vm_state() { # stopped | starting | running | stopping
 
 # One JSON object for the bar widget. Cheap enough to be asked every few seconds.
 cmd_state() {
-  local vm deadline=0 n=0 installed=false access=prompt desktop=false apps='[]'
+  local vm deadline=0 n=0 installed=false access=prompt desktop=false apps='[]' ram="" cores=""
   vm_installed && installed=true
   docker_direct && access=direct
   vm=$(vm_state)
@@ -354,15 +354,18 @@ cmd_state() {
     desktop_open && desktop=true
     [[ $vm == running ]] && deadline=$(awk '{print $2}' "$RUN_DIR/idle" 2>/dev/null)
   fi
+  read -r ram cores <<<"$(vm_resources)"
   # another launcher entry appeared or went: ours may need renaming to stay distinct
   menu_stale && detached "$SELF" sync --quiet
   [[ -s $APPS_FILE ]] && apps=$(jq -c '[.apps[]? | select(.panel != false)
       | {id, name: (.name // .id), label: (.label // .name // .id), icon: (.icon // "")}]' "$APPS_FILE" 2>/dev/null)
   jq -cn --arg vm "$vm" --arg access "$access" --arg version "$(version)" \
     --argjson installed "$installed" --argjson windows "${n:-0}" --argjson desktop "$desktop" \
+    --arg ram "${ram:-}" --arg cores "${cores:-}" \
     --argjson idle "$(idle_minutes)" --argjson deadline "${deadline:-0}" \
     --argjson now "$(date +%s)" --argjson apps "${apps:-[]}" \
     '{version: $version, installed: $installed, vm: $vm, access: $access, windows: $windows, desktop: $desktop,
+      ram: $ram, cores: $cores,
       idleMinutes: $idle, idleDeadline: $deadline, now: $now, apps: $apps}'
 }
 

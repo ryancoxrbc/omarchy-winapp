@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.1.0 - 2026-10-05
+
+### Added
+
+- `winapp resources` shows how much memory and how many processors the
+  Windows VM has, and changes them: `winapp resources --ram 8 --cores 4`. The
+  bar panel has a "Memory and processors" row that opens a picker. The change
+  goes through Omarchy's own configuration writer, so it asks for your
+  password, and applies the next time Windows starts.
+
 ## 2.0.1 - 2026-10-05
 
 ### Fixed

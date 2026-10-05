@@ -93,7 +93,7 @@ read -r LISTEN_PORT <&"$listener"
 load() {
   SELF=$WINAPP
   # shellcheck source=/dev/null
-  for lib in common config vm rdp paths launch guest apps doctor setup; do source "$ROOT/lib/$lib.sh"; done
+  for lib in common config vm rdp paths launch guest apps resources doctor setup; do source "$ROOT/lib/$lib.sh"; done
 }
 
 group() { # group <name>: true when this group should run
@@ -452,6 +452,76 @@ if group "setup and uninstall"; then (
 
   rm -f "$WINAPP_VM_HELPER"
   refuses "setup needs Omarchy's Windows VM support" "$WINAPP" setup --yes --no-scan
+  exit $failed
+); failed=$((failed + $?)); fi
+
+# -------------------------------------------------------------------------------
+if group "resources: the VM's memory and processors"; then (
+  failed=0
+  cat >"$WINAPP_VM_DIR/docker-compose.yml" <<'COMPOSE'
+services:
+  windows:
+    environment:
+      RAM_SIZE: "4G"
+      CPU_CORES: "2"
+      DISK_SIZE: "64G"
+      USERNAME: "docker"
+      PASSWORD: "x"
+      TZ: "Europe/Paris"
+COMPOSE
+  has "the current values are read from Omarchy's configuration" "$("$WINAPP" resources)" "4 GB of memory, 2 processors"
+  is "state carries them for the panel" "$("$WINAPP" state | jq -r '.ram + " " + .cores')" "4G 2"
+  has "setting what is already set changes nothing" "$("$WINAPP" resources --ram 4 --cores 2)" "nothing to change"
+  [[ ! -e $STUB_OUT/pkexec.calls ]] && pass || fail "…and asks for no password"
+
+  succeeds "changing the memory alone" "$WINAPP" resources --ram 2gb
+  is "Omarchy's writer gets the full set, the rest exactly as it was" "$(cat "$STUB_OUT/compose.written")" \
+    $'RAM=2G\nCORES=2\nDISK=64G\nUSERNAME=tester\nPASSWORD=p=ss w"rd\nTZ=Europe/Paris'
+  has "…through Omarchy's own helper" "$(cat "$STUB_OUT/pkexec.calls")" "$WINAPP_VM_HELPER __priv write_compose"
+  succeeds "changing the processors alone" "$WINAPP" resources --cores 1
+  has "…keeps the memory" "$(cat "$STUB_OUT/compose.written")" $'RAM=4G\nCORES=1\n'
+
+  refuses "more memory than the computer has" "$WINAPP" resources --ram 999
+  refuses "less than Windows needs" "$WINAPP" resources --ram 1
+  refuses "no processors" "$WINAPP" resources --cores 0
+  refuses "more processors than the computer has" "$WINAPP" resources --cores 99
+  refuses "nonsense" "$WINAPP" resources --ram plenty
+
+  mkdir -p "$XDG_RUNTIME_DIR/winapp/clients" && : >"$STUB_OUT/window-open"
+  "$WINAPP" run 'C:\\x.exe' >/dev/null 2>&1 &
+  app=$!
+  for _ in $(seq 100); do [[ -s $STUB_OUT/launch.rdp ]] && break; sleep 0.1; done
+  rm -f "$STUB_OUT/compose.written"
+  refuses "nothing changes while an app is open" "$WINAPP" resources --ram 2
+  [[ ! -e $STUB_OUT/compose.written ]] && pass || fail "…and nothing is written"
+  rm -f "$STUB_OUT/window-open"
+  wait "$app"
+  "$WINAPP" stop >/dev/null 2>&1
+
+  # Without Docker access the compose file cannot be read: the disk size comes
+  # from the image, the time zone from the system, the rest from what is known.
+  load
+  COMPOSE=$TMP/world/unreadable.yml
+  refuses "no disk image, no guess at its size" vm_disk
+  truncate -s 64G "$STORAGE_DIR/data.img"
+  is "the disk size is the size of the image" "$(vm_disk)" "64G"
+  rm -f "$STUB_OUT/compose.written"
+  (resources_write 8G 4) >/dev/null 2>&1
+  is "the full set is still complete" "$(cat "$STUB_OUT/compose.written")" \
+    $'RAM=8G\nCORES=4\nDISK=64G\nUSERNAME=tester\nPASSWORD=p=ss w"rd\nTZ=Africa/Nairobi'
+  is "…and what was set is remembered" "$(vm_resources)" "8G 4"
+  (
+    qemu_args() { echo "123 qemu-system-x86_64 -nodefaults -cpu host -smp 6,sockets=1,cores=6 -m 12G -machine q35 -name windows,process=windows"; }
+    is "a running VM shows what it was really given" "$(vm_resources)" "12G 6"
+  )
+  truncate -s 68719476737 "$STORAGE_DIR/data.img"
+  refuses "an image that is not a whole number of GB is not guessed at" vm_disk
+  rm -f "$STUB_OUT/compose.written" "$CREDENTIALS"
+  truncate -s 64G "$STORAGE_DIR/data.img"
+  refuses "without the VM's account nothing is written" resources_write 8G 4
+  [[ ! -e $STUB_OUT/compose.written ]] && pass || fail "…really nothing"
+
+  is "sizes are read generously" "$(normal_ram 8; normal_ram 16g; normal_ram '32 GB'; normal_ram 4GiB)" $'8G\n16G\n32G\n4G'
   exit $failed
 ); failed=$((failed + $?)); fi
 
