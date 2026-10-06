@@ -70,21 +70,166 @@ guest_out() { # guest_out [jq options] <filter>: read the last job's result
   jq -r "$@" "$GUEST_DIR/out.json" 2>/dev/null
 }
 
-# --- what winapp keeps set in Windows ----------------------------------------
-# Two standing settings, applied by the apply job like the frame program and
-# brought up to date the same way, before an app is started from cold:
+# --- changes to Windows that are the user's to decide --------------------------
+# Windows works without either of these, so neither is made until the user has
+# said yes, and each is undone when they change their mind (the apply job keeps
+# what Windows was set to before):
 #
-#   console  Nobody is signed in on the VM's console at boot. As installed,
-#            Windows signs the user in there, on a desktop nobody looks at,
-#            and every start then has to wait for that and claim the session
-#            (lib/vm.sh, "primed"). "consoleSignIn": true in config.json keeps
-#            the sign-in, and the slow start that goes with it.
-#   trim     The search indexer and Widgets are off: neither is of use to an
-#            app shown on its own. "trimWindows": false leaves them on.
+#   fast  ("fastStart" in config.json) Nobody is signed in on the VM's console
+#         at boot. As installed, Windows signs the user in there, on a desktop
+#         nobody looks at, and every start then has to wait for that and claim
+#         the session (lib/vm.sh, "primed").
+#   trim  ("trimWindows") The search indexer and Widgets are off.
 #
-# Windows keeps what it was set to before, and gets it back when a setting
-# here is switched off again.
-tune_options() { cfg_json | jq -c '{console: (.consoleSignIn == true), trim: (.trimWindows != false)}'; }
+# A setting that is true is applied, false is undone, and one that is not
+# there has not been decided: Windows is left as it is, and the question is
+# put (changes_ask). What every install needs (RemoteApp for any program, the
+# share's cache, the frame program) is not asked; `winapp changes` lists it.
+CHANGES=(fast trim)
+
+change_key() {
+  case $1 in
+  fast) echo fastStart ;;
+  trim) echo trimWindows ;;
+  esac
+}
+
+change_title() {
+  case $1 in
+  fast) echo "Start Windows faster" ;;
+  trim) echo "Switch off Windows' search indexer and Widgets" ;;
+  esac
+}
+
+change_text() {
+  case $1 in
+  fast) echo "Windows signs in on the VM's own console at every start, on a desktop nobody looks at, and the first app waits half a minute for that. With that sign-in switched off, an app opens about 13 seconds after a cold start instead of 40. The web console on port 8006 then shows Windows' sign-in screen." ;;
+  trim) echo "Neither is of use to an app shown on its own, and both run in the background after every start. This leaves the VM's processors and disk alone; it does not make apps open faster." ;;
+  esac
+}
+
+# yes | no | ask. (2.3.0 applied both unasked and had "consoleSignIn": true
+# for keeping the sign-in.)
+change_state() {
+  cfg_json | jq -r --arg key "$(change_key "$1")" --arg name "$1" '
+    if .[$key] == true then "yes" elif .[$key] == false then "no"
+    elif $name == "fast" and .consoleSignIn == true then "no" else "ask" end'
+}
+
+change_set() { # change_set <name> <yes|no|ask>
+  local key
+  key=$(change_key "$1")
+  case $2 in
+  yes) cfg_set "$key" true ;;
+  no) cfg_set "$key" false ;;
+  ask) cfg_edit 'del(.[$k]) | del(.changesAsked[$n])' --arg k "$key" --arg n "$1" ;;
+  esac
+}
+
+# Undecided changes whose question is due: not put in the last week.
+changes_due() {
+  local name asked now
+  now=$(date +%s)
+  for name in "${CHANGES[@]}"; do
+    [[ $(change_state "$name") == ask ]] || continue
+    asked=$(cfg_json | jq -r --arg n "$name" '.changesAsked[$n] // 0')
+    ((now - asked >= 7 * 86400)) && echo "$name"
+  done
+  return 0
+}
+
+# One question, in a terminal: yes, not now, or no for good.
+change_choose() { # change_choose <name>
+  local name=$1 answer
+  say ""
+  say "$(change_title "$name")?"
+  say "$(change_text "$name")" | fold -s -w 78
+  answer=$(gum choose --header="" "Yes" "Not now" "No, and don't ask again") || answer="Not now"
+  case $answer in
+  Yes) change_set "$name" yes ;;
+  No*) change_set "$name" no ;;
+  *) cfg_edit '.changesAsked[$n] = $t' --arg n "$name" --argjson t "$(date +%s)" ;;
+  esac
+}
+
+# The same question for someone who opened an app from the launcher or the
+# bar: a notification with the three answers as buttons. One that goes
+# unanswered counts as "not now".
+change_notify() { # change_notify <name>
+  local name=$1 answer
+  cfg_edit '.changesAsked[$n] = $t' --arg n "$name" --argjson t "$(date +%s)"
+  answer=$(notify-send -a "Windows apps" -t 0 -A "yes=Yes" -A "later=Not now" -A "no=Don't ask again" \
+    "$(change_title "$name")?" "$(change_text "$name")" 2>/dev/null)
+  case $answer in
+  yes)
+    change_set "$name" yes
+    notify "$(change_title "$name")" "Will be done the next time an app is opened with no other open. Undo with: winapp changes"
+    ;;
+  no) change_set "$name" no ;;
+  esac
+}
+
+# Put the questions that are due, without holding anything up: the app that
+# is being opened opens meanwhile, on Windows as it is.
+changes_ask() {
+  [[ -n $(changes_due) ]] && have notify-send || return 0
+  detached "$SELF" __ask
+}
+
+cmd___ask() {
+  local fd name
+  ensure_dirs
+  exec {fd}>"$RUN_DIR/ask.lock" || return 0
+  flock -n "$fd" || return 0 # the questions are on screen already
+  for name in $(changes_due); do change_notify "$name"; done
+}
+
+cmd_changes() { # winapp changes [allow|deny|ask <name>]
+  local action=${1:-} name=${2:-} state
+  case $action in
+  allow | deny | ask)
+    [[ " ${CHANGES[*]} " == *" $name "* && -n $name ]] || die "usage: winapp changes [allow|deny|ask] <${CHANGES[*]}>"
+    case $action in allow) state=yes ;; deny) state=no ;; *) state=ask ;; esac
+    change_set "$name" "$state" || die "could not update $CONFIG_FILE"
+    say "$(change_title "$name"): $state. It reaches Windows with the next app opened while no other is open."
+    return 0
+    ;;
+  "") ;;
+  *) die "usage: winapp changes [allow|deny|ask <${CHANGES[*]}>]" ;;
+  esac
+
+  say "Changes winapp makes inside Windows"
+  say ""
+  say "Yours to decide:"
+  for name in "${CHANGES[@]}"; do
+    state=$(change_state "$name")
+    printf '  %-5s %-12s %s\n' "$name" "$(case $state in yes) echo "yes" ;; no) echo "no" ;; *) echo "not decided" ;; esac)" "$(change_title "$name")"
+    change_text "$name" | fold -s -w 70 | sed 's/^/                     /'
+  done
+  say ""
+  say "Always, because apps do not work without them:"
+  say "  RemoteApp may start any program, not only listed ones"
+  say "  the ~/Windows share shows Linux-side changes at once (no listing cache)"
+  say "  your shared folders are pinned to Quick access"
+  say "  a small program (winapp-frame.exe) starts apps and tidies window frames"
+  say ""
+  if interactive && have gum; then
+    for name in "${CHANGES[@]}"; do
+      [[ $(change_state "$name") == ask ]] && change_choose "$name"
+    done
+    say ""
+  fi
+  say "Change an answer with: winapp changes allow|deny|ask <${CHANGES[*]}>"
+}
+
+tune_options() {
+  local name state out='{}'
+  for name in "${CHANGES[@]}"; do
+    state=$(change_state "$name")
+    out=$(jq -c --arg n "$name" --arg s "$state" '.[$n] = (if $s == "yes" then true elif $s == "no" then false else null end)' <<<"$out")
+  done
+  printf '%s\n' "$out"
+}
 
 tune_job() { tune_options | jq -c '{tune: .}'; }
 
@@ -112,6 +257,13 @@ console_free() {
   [[ $(cfg_json | jq -r '.guestTune | "\(.vm) \(.console)"') == "$(vm_identity) false" ]]
 }
 
+# The shared folders are pinned to Quick access, so that file dialogs offer
+# them, and one that is no longer shared is unpinned. Done again whenever the
+# list of shares has changed.
+pins_job() { shares | jq -Rcn '{pin: [inputs | split("\t")[0] | "\\\\tsclient\\" + .]}'; }
+pins_current() { [[ $(cfg .guestPinned "") == "$(vm_identity) $(pins_job)" ]]; }
+pins_noted() { cfg_set guestPinned "$(printf '%s %s' "$(vm_identity)" "$(pins_job)" | jq -R .)"; }
+
 # A single-app logon was refused: someone is signed in on the console. This
 # boot needs the ordinary logon first, and so does every later one until the
 # setting has been applied again.
@@ -130,11 +282,13 @@ standing_refresh() {
   local job='{}'
   if frame_wanted && ! frame_current; then job=$(frame_job); fi
   tune_current || job=$(tune_job | jq -c --argjson job "$job" '$job + .')
+  pins_current || job=$(pins_job | jq -c --argjson job "$job" '$job + .')
   [[ $job != '{}' ]] || return 0
   clients_alive && return 0
   if guest_run apply "$job" 120; then
     [[ $(jq 'has("frame")' <<<"$job") == true ]] && { frame_noted || true; }
     [[ $(jq 'has("tune")' <<<"$job") == true ]] && tune_noted
+    [[ $(jq 'has("pin")' <<<"$job") == true ]] && pins_noted
   fi
   idle_cancel # the job armed the idle timer, and an app is about to open
 }

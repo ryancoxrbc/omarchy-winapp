@@ -1,3 +1,5 @@
 #!/bin/bash
-# gum is only needed interactively; the tests just need it to exist.
+# gum is only needed interactively. A test that wants a choice made puts the
+# answer in gum.answer; otherwise nothing is chosen.
+[[ ${1:-} == choose && -e ${STUB_OUT:?}/gum.answer ]] && cat "$STUB_OUT/gum.answer"
 exit 0

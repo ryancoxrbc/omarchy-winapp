@@ -59,7 +59,7 @@ guest_prepared() { [[ $(cfg .guestPrepared "") == "$(vm_identity)" ]]; }
 
 guest_prepare() {
   local job
-  job=$(shares | jq -Rn '{remoteapp: true, smbCache: true, pin: [inputs | split("\t")[0] | "\\\\tsclient\\" + .]}')
+  job=$(pins_job | jq -c '{remoteapp: true, smbCache: true} + .')
   frame_wanted && job=$(frame_job | jq -c --argjson job "$job" '$job + .')
   job=$(tune_job | jq -c --argjson job "$job" '$job + .')
   guest_run apply "$job" 120 || return 1
@@ -68,6 +68,7 @@ guest_prepare() {
     return 1
   fi
   tune_noted
+  pins_noted
   # cosmetic, so not a reason to call Windows unprepared; winapp doctor reports it
   frame_wanted && { frame_noted || true; }
   cfg_set guestPrepared "$(vm_identity | jq -R .)"
@@ -89,7 +90,7 @@ enable_plugin() {
 }
 
 cmd_setup() {
-  local scan=ask
+  local scan=ask change
   while (($#)); do
     case $1 in
     -y | --yes) ASSUME_YES=1 ;;
@@ -119,6 +120,17 @@ cmd_setup() {
     return 0
   fi
 
+  # the two things that are the user's to decide, while someone is there to ask
+  if interactive && have gum && ((!ASSUME_YES)); then
+    if [[ -z $(shares all) ]]; then
+      say ""
+      share_pick
+    fi
+    for change in "${CHANGES[@]}"; do
+      [[ $(change_state "$change") == ask ]] && change_choose "$change"
+    done
+  fi
+
   if [[ $scan == ask ]] && interactive && have gum; then
     say ""
     confirm "Start Windows now to prepare it and pick your apps? (about a minute)" && scan=yes
@@ -137,6 +149,7 @@ cmd_setup() {
   say ""
   say "Done. Next:"
   say "  winapp manage     pick which Windows apps appear on Linux"
+  say "  winapp share pick choose the folders Windows apps can open and save in"
   say "  winapp desktop    open the Windows desktop to install more programs"
   say "  winapp doctor     check that everything works"
 }

@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.4.0 - 2026-10-06
+
+### Changed
+
+- In the panel, "Stop when idle for" is above "Start-up", so that the note
+  about cold and warm is what runs off the bottom, not a control.
+- You choose which folders Windows can reach, and none is shared until you
+  have. A new install no longer redirects your whole home folder: `winapp
+  setup` shows a checklist of the folders in it, and so do *Shared folders* in
+  the panel and `winapp share pick`. A file outside every shared folder still
+  opens, bringing just its own folder along. If you already use winapp, your
+  shares stay as they are (the whole home folder, unless you changed it);
+  narrowing them is one `winapp share pick` away.
+- winapp asks before it changes anything optional inside Windows. 2.3.0
+  switched off the console sign-in, the search indexer and Widgets on its own;
+  each is now a question with three answers (yes, not now, don't ask again),
+  put in `winapp setup` or as a notification the first time you open an app.
+  Until you answer, Windows is left as it is: what 2.3.0 already switched off
+  stays off, and "don't ask again" puts it back. `winapp changes` lists
+  everything winapp does in Windows and changes an answer; the panel shows a
+  *Changes to Windows* row while a question is open. `"consoleSignIn"` from 2.3.0 is replaced by
+  `"fastStart"`; `"consoleSignIn": true` is still read as a no.
+- `winapp explorer` without a folder opens the first shared folder instead of
+  the home folder.
+
 ## 2.3.0 - 2026-10-06
 
 ### Added

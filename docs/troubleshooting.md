@@ -30,14 +30,20 @@ thought it had that session. It normally notices and retries by itself; if you
 do see the prompt, close the window and open the app again.
 
 **The web console (port 8006) shows Windows' sign-in screen**
-That is intended: nobody is signed in on the console, so that the first app
-does not have to wait for that. Sign in there with the account in
-`~/.config/windows/credentials`, or use `winapp desktop`. `"consoleSignIn":
-true` in `config.json` brings the old behaviour back.
+You said yes to "Start Windows faster": nobody is signed in on the console, so
+that the first app does not have to wait for that. Sign in there with the
+account in `~/.config/windows/credentials`, or use `winapp desktop`.
+`winapp changes deny fast` brings the old behaviour back.
 
-**The first app after starting Windows still takes most of a minute**
-Windows still signs in on its console. `winapp doctor --deep` says so and
-applies the setting again; it takes effect the next time Windows starts.
+**The first app after starting Windows takes most of a minute**
+Windows signs in on its console, and the app waits for that. `winapp changes`
+shows whether you have agreed to switch that off; once you have, it takes
+effect the second time Windows starts.
+
+**A Windows app cannot find or save to a folder**
+Only the folders you share reach Windows: `winapp shares` lists them and
+`winapp share pick` changes them. A file opened from anywhere else brings just
+its own folder along.
 
 **The app's window is black or white, says "Not Responding", and ignores the
 mouse; tiny extra windows may appear next to it.**

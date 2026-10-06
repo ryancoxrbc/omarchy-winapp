@@ -68,6 +68,26 @@ fresh() {
   : >"$WINAPP_VM_DIR/docker-compose.yml"
   : >"$OMARCHY_DOCKER_SOCKET"
   printf 'USERNAME=tester\nPASSWORD=p=ss w"rd\n' >"$HOME/.config/windows/credentials"
+  # Someone who has shared their home folder and said yes to both changes to
+  # Windows; the checks about choosing start from decide_nothing instead.
+  mkdir -p "$XDG_CONFIG_HOME/winapp"
+  cat >"$XDG_CONFIG_HOME/winapp/config.json" <<'CONFIG'
+{
+  "mode": "cold",
+  "idleMinutes": 5,
+  "shares": [{ "name": "home", "path": "~" }],
+  "scale": "auto",
+  "pointerScale": "auto",
+  "windowsSuffix": "auto",
+  "helperWindowFix": true,
+  "superKey": "linux",
+  "titleBars": false,
+  "roundedCorners": false,
+  "fastStart": true,
+  "trimWindows": true,
+  "rdpArgs": []
+}
+CONFIG
   cat >"$WINAPP_VM_HELPER" <<'EOF'
 #!/bin/bash
 echo "helper $*" >>"$STUB_OUT/helper.calls"
@@ -78,6 +98,8 @@ EOF
   chmod +x "$WINAPP_VM_HELPER"
 }
 ORIGINAL_PATH=$PATH
+
+decide_nothing() { rm -f "$XDG_CONFIG_HOME/winapp/config.json"; } # a new install
 
 # Something to connect to where the guest's RDP port would be. Like Windows, it
 # confirms an RDP connection request, which is how winapp tells that Windows is
@@ -468,14 +490,14 @@ if group "sessions: the next app, and a start that does not wait"; then (
   )
 
   # the console
-  is "the standing settings went along with the first app's job" "$(jq -c .tune "$STUB_OUT/guest.in.json")" '{"console":false,"trim":true}'
+  is "the changes that were agreed to went along with the first app's job" "$(jq -c .tune "$STUB_OUT/guest.in.json")" '{"fast":true,"trim":true}'
   console_free && fail "a VM that has not said so is taken to sign in on its console" || pass
   has "…and is started the way that waits for that" "$(cat "$STUB_OUT/pkexec.calls")" "__priv up_wait"
   [[ -s $STUB_OUT/prime.runs ]] && pass || fail "…with a logon that claims the console's session"
   printf '{"frame":{"status":"ok"},"tune":{"console":false,"search":4,"widgets":0}}\n' >"$STUB_OUT/guest.json"
   cfg_set trimWindows false
   standing_refresh
-  is "a changed setting is sent before the next app" "$(jq -c .tune "$STUB_OUT/guest.in.json")" '{"console":false,"trim":false}'
+  is "a changed answer is sent before the next app" "$(jq -c .tune "$STUB_OUT/guest.in.json")" '{"fast":true,"trim":false}'
   console_free && pass || fail "a console that Windows says is free is remembered"
   "$WINAPP" stop >/dev/null 2>&1
   rm -f "$STUB_OUT/pkexec.calls" "$STUB_OUT/prime.runs"
@@ -487,9 +509,77 @@ if group "sessions: the next app, and a start that does not wait"; then (
   console_free && fail "a refused logon means the console signs in after all" || pass
   primed && fail "…this boot needs the claiming logon" || pass
   tune_current && fail "…and the setting is applied again" || pass
-  cfg_set consoleSignIn true
-  is "consoleSignIn: true keeps the sign-in" "$(tune_job)" '{"tune":{"console":true,"trim":false}}'
+  cmd_changes deny fast >/dev/null
+  is "a no is sent as something to undo" "$(tune_job)" '{"tune":{"fast":false,"trim":false}}'
+  cmd_changes ask trim >/dev/null
+  is "an open question leaves Windows as it is" "$(tune_job)" '{"tune":{"fast":false,"trim":null}}'
   "$WINAPP" stop >/dev/null 2>&1
+  exit $failed
+); failed=$((failed + $?)); fi
+
+# -------------------------------------------------------------------------------
+if group "choices: what is shared, and what is changed in Windows"; then (
+  failed=0
+  decide_nothing
+  load
+  mkdir -p "$HOME/pCloudDrive" "$HOME/Work" "$HOME/My Stuff, 2024"
+
+  # a new install shares nothing
+  is "nothing is shared until someone chooses" "$(shares all)" ""
+  state=$("$WINAPP" state)
+  is "state says so, for the panel" "$(jq -c .shares <<<"$state")" "[]"
+  touch "$HOME/Documents/a.docx"
+  has "a file still opens" "$(win_path "$HOME/Documents/a.docx")" '\a.docx'
+  has "…its own folder comes along" "$(drive_args)" ",$HOME/Documents"
+  lacks "…and nothing else of home" "$(drive_args)" ",$HOME"$'\n'
+  rm -f "$DRIVES_PENDING"
+  refuses "explorer has to be told where, with nothing shared" "$WINAPP" explorer
+
+  is "a share is named after its folder" "$(share_name "$HOME/pCloudDrive" "")" "pclouddrive"
+  is "…without what Windows cannot take" "$(share_name "$HOME/My Stuff, 2024" "")" "mystuff2024"
+  is "…starting with a letter" "$(share_name "$HOME/2024" "")" "f2024"
+  is "…and not a name that is taken" "$(share_name "$HOME/pCloudDrive" "pclouddrive")" "pclouddrive2"
+  is "the home folder is called home" "$(share_name "$HOME" "")" "home"
+
+  printf '~/pCloudDrive\n~/My Stuff  2024\n' >"$STUB_OUT/gum.answer"
+  share_pick >/dev/null
+  is "the folders ticked are shared" "$(shares all)" "pclouddrive"$'\t'"$HOME/pCloudDrive"$'\n'"mystuff2024"$'\t'"$HOME/My Stuff, 2024"
+  is "…and state lists them" "$("$WINAPP" state | jq -c .shares)" '["pclouddrive","mystuff2024"]'
+  cfg_edit '.shares[0].name = "cloud"'
+  printf '~/pCloudDrive\n~/Work\n' >"$STUB_OUT/gum.answer"
+  share_pick >/dev/null
+  is "one that stays keeps its name, one unticked goes" "$(shares all)" "cloud"$'\t'"$HOME/pCloudDrive"$'\n'"work"$'\t'"$HOME/Work"
+  printf '~  (everything in your home folder)\n' >"$STUB_OUT/gum.answer"
+  share_pick >/dev/null
+  is "the whole home folder is a choice like any other" "$(shares all)" "home"$'\t'"$HOME"
+  refuses "the names winapp uses itself are not for shares" "$WINAPP" share add winappq "$HOME/Work"
+
+  # changes to Windows are asked, not made
+  is "both changes are open questions" "$(changes_due | tr '\n' ' ')" "fast trim "
+  is "…state counts them" "$(jq -r .undecided <<<"$state")" "2"
+  is "…and Windows is left as it is meanwhile" "$(tune_job)" '{"tune":{"fast":null,"trim":null}}'
+  echo yes >"$STUB_OUT/notify.answer"
+  change_notify fast
+  is "yes is remembered" "$(change_state fast)" "yes"
+  has "…the question said what it is for" "$(cat "$STUB_OUT/desktop.calls")" "13 seconds after a cold start"
+  echo no >"$STUB_OUT/notify.answer"
+  change_notify trim
+  is "don't ask again is a no" "$(change_state trim)" "no"
+  is "…and that is what Windows gets" "$(tune_job)" '{"tune":{"fast":true,"trim":false}}'
+  is "nothing is left to ask" "$(changes_due)" ""
+  rm -f "$STUB_OUT/notify.answer"
+  cmd_changes ask fast >/dev/null
+  is "an answer can be taken back" "$(changes_due)" "fast"
+  change_notify fast
+  is "a question that goes unanswered stays open" "$(change_state fast)" "ask"
+  is "…but is not put again within the week" "$(changes_due)" ""
+  succeeds "an answer can be given by command" "$WINAPP" changes allow fast
+  is "…and counts" "$(change_state fast)" "yes"
+  refuses "…only for a change there is" "$WINAPP" changes allow everything
+  has "changes lists what is always done too" "$("$WINAPP" changes)" "RemoteApp may start any program"
+  cmd_changes ask fast >/dev/null
+  cfg_set consoleSignIn true
+  is "2.3.0's consoleSignIn: true still means no" "$(change_state fast)" "no"
   exit $failed
 ); failed=$((failed + $?)); fi
 

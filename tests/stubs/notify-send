@@ -1,2 +1,6 @@
 #!/bin/bash
+# Records the notification. One with buttons is answered with notify.answer,
+# when a test put one there, and goes unanswered otherwise.
 echo "$(basename "$0") $*" >>"${STUB_OUT:?}/desktop.calls"
+[[ " $* " == *" -A "* && -e $STUB_OUT/notify.answer ]] && cat "$STUB_OUT/notify.answer"
+exit 0

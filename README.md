@@ -50,9 +50,8 @@ missing.
 Say you want CorelDRAW.
 
 1. **Install it in Windows.** Open the panel and choose *Windows desktop* (or
-   run `winapp desktop`). Your Linux home folder is there under *This PC* as
-   *home on …*, so you can run an installer straight out of `Downloads`. An
-   installer can also be started from Linux directly:
+   run `winapp desktop`). The folders you share are there under *This PC*.
+   An installer can also be started from Linux directly, wherever it is:
    `winapp run ~/Downloads/CorelDRAW-Setup.exe`.
 2. **Tick it.** Close the desktop window, choose *Add or remove apps* in the
    panel (or run `winapp manage`), tick CorelDRAW, press Enter.
@@ -79,22 +78,28 @@ winapp add signtool --name "Sign Tool" \
 
 ## How your files reach Windows
 
-When an app starts, your home folder is redirected into the Windows session as
-`\\tsclient\home`. Opening `~/Designs/logo.cdr` hands the app
-`\\tsclient\home\Designs\logo.cdr`; it reads and writes the real file.
+Nothing is copied. The folders you share are redirected into the Windows
+session, each as `\\tsclient\<name>`, and an app reads and writes the real
+files there. You choose them, in `winapp setup`, under *Shared folders* in the
+panel, or with:
 
-- In a Windows file dialog, your home folder is under *This PC* and pinned to
+```bash
+winapp share pick                     # a checklist of the folders in your home
+winapp shares                         # what Windows can reach
+winapp share add work /mnt/projects   # appears as \\tsclient\work
+winapp share remove work
+```
+
+With `~/Designs` shared as `designs`, opening `~/Designs/logo.cdr` hands the
+app `\\tsclient\designs\logo.cdr`.
+
+- Nothing is shared until you choose. Whatever you share, every program in
+  Windows can read and change, so share what your Windows work needs.
+- In a Windows file dialog, shared folders are under *This PC* and pinned to
   *Quick access*.
-- A file outside your home folder (a USB stick, another disk) is redirected
-  automatically when you open it.
-- To share less than your whole home folder, or more than it:
-
-  ```bash
-  winapp shares                         # what Windows can reach
-  winapp share add work /mnt/projects   # appears as \\tsclient\work
-  winapp share remove home              # then share only what you choose
-  ```
-
+- A file outside every shared folder (in `Downloads`, on a USB stick) still
+  opens: its own folder, or the whole removable disk, is redirected until
+  Windows stops.
 - Omarchy's own shared folder, `~/Windows`, still works alongside this, and the
   setup fixes a quirk where files added to it from Linux did not show up in
   Windows.
@@ -134,8 +139,10 @@ Click the Windows icon in the bar, or bind a key to
 | Windows desktop | The full desktop, for installing programs and changing settings. |
 | Add or remove apps | The checklist of installed programs. |
 | Memory and processors | How much of this computer Windows gets. |
-| Start-up | **Cold**: Windows starts when you open an app (about 15 seconds) and stops when idle, so it uses no memory in between. **Warm**: Windows starts when you log in and stays on, so every app opens in about 3 seconds; it holds its memory (16 GB, say) all the time, in use or not. |
+| Shared folders | Tick the folders Windows apps can open and save in. |
+| Changes to Windows | Shown while winapp has a question for you about an optional change inside Windows. `winapp changes` lists them all at any time. |
 | Stop when idle for | Cold only: how long the VM stays up after the last app closes. |
+| Start-up | **Cold**: Windows starts when you open an app (about 15 seconds) and stops when idle, so it uses no memory in between. **Warm**: Windows starts when you log in and stays on, so every app opens in about 3 seconds; it holds its memory (16 GB, say) all the time, in use or not. |
 
 Keyboard: `↑` `↓` or `j` `k` to move, `Enter` to activate, `←` `→` on the idle
 row, `d` for the desktop, `a` to add apps, `m` for memory and processors, `r` to
@@ -201,7 +208,7 @@ winapp setup | doctor [--deep] | logs | uninstall
 |---|---|---|
 | `mode` | `"cold"` | `"cold"` starts Windows when an app is opened and stops it when idle. `"warm"` starts it when you log in (the bar widget does that) and keeps it on: apps open in a few seconds, and the VM's memory stays in use. |
 | `idleMinutes` | `5` | Stop the VM this long after the last app window closes. `0` never does. |
-| `shares` | home as `home` | Folders redirected into Windows. |
+| `shares` | none | Folders redirected into Windows; choose them with `winapp share pick`. |
 | `scale` | `"auto"` | `"auto"` follows the focused monitor; or a percentage such as `150`. |
 | `pointerScale` | `"auto"` | What Windows' mouse pointer is reduced by on a scaled monitor: `"auto"` is the focused monitor's scale; or a percentage, `100` for none. |
 | `windowsSuffix` | `"auto"` | Add " (Windows)" to a launcher name: `"auto"` only when another app has the same name, `"always"`, or `"never"`. |
@@ -209,8 +216,8 @@ winapp setup | doctor [--deep] | logs | uninstall
 | `superKey` | `"linux"` | `"linux"` keeps the Super key for Omarchy's shortcuts, so Windows' Start menu does not open when you switch workspace. `"windows"` passes it to Windows. |
 | `titleBars` | `false` | `true` keeps the title bar Windows draws on app windows; see [window frames](docs/how-it-works.md#window-frames). |
 | `roundedCorners` | `false` | `true` keeps Windows 11's rounded window corners. |
-| `consoleSignIn` | `false` | `true` lets Windows sign in on the VM's own console at boot, as dockur sets it up. The first app then waits half a minute longer; see [what is changed in Windows](docs/how-it-works.md#what-is-changed-in-windows). |
-| `trimWindows` | `true` | Keeps Windows' search indexer and Widgets off. `false` puts them back. |
+| `fastStart` | not set | Your answer to "Start Windows faster?": `true` switches off Windows' sign-in on the VM's own console, so the first app does not wait half a minute for it; `false` leaves or restores it; not set means you have not been asked yet. See [what is changed in Windows](docs/how-it-works.md#what-is-changed-in-windows). |
+| `trimWindows` | not set | Your answer to switching off Windows' search indexer and Widgets, in the same three states. |
 | `rdpArgs` | `[]` | Extra FreeRDP arguments for every session, for example `["/microphone"]` or `["/kbd:layout:0x0407"]`. |
 
 `~/.config/winapp/apps.json` is the app list. It can be edited by hand; run
@@ -234,10 +241,13 @@ winapp logs            # the latest session log
 
 ## Good to know
 
-- **Security.** Sharing your home folder gives programs inside the Windows VM
-  the same access to your files that you have. That is what makes "open in
-  place" work, and it is the same trade you make with any app you run, but a
-  VM you use for untrusted software should get a narrower share (see above).
+- **Security.** A shared folder gives every program inside the Windows VM, a
+  macro in a document included, the same access to its files that you have.
+  That is what makes "open in place" work, and it is why nothing is shared
+  until you choose: share the folders your Windows work lives in, not your
+  whole home folder with its keys and browser profiles.
+- **Your say.** winapp changes nothing optional inside Windows without asking.
+  `winapp changes` lists everything it does there.
 - **One app session.** All Windows apps share one Windows session. Opening a
   second app moves the first one's windows across to a new connection; they
   blink once and carry on.

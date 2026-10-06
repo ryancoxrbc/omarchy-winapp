@@ -377,7 +377,7 @@ vm_state() { # stopped | starting | running | stopping
 
 # One JSON object for the bar widget. Cheap enough to be asked every few seconds.
 cmd_state() {
-  local vm deadline=0 n=0 installed=false access=prompt desktop=false apps='[]' ram="" cores="" mode=cold
+  local vm deadline=0 n=0 installed=false access=prompt desktop=false apps='[]' ram="" cores="" mode=cold shared undecided change
   vm_installed && installed=true
   docker_direct && access=direct
   vm=$(vm_state)
@@ -395,13 +395,15 @@ cmd_state() {
   [[ -s $APPS_FILE ]] && apps=$(jq -c '[.apps[]? | select(.panel != false)
       | {id, name: (.name // .id), label: (.label // .name // .id), icon: (.icon // "")}]' "$APPS_FILE" 2>/dev/null)
   warm && mode=warm
+  shared=$(shares | cut -f1 | jq -Rcn '[inputs]')
+  undecided=$(for change in "${CHANGES[@]}"; do [[ $(change_state "$change") == ask ]] && echo x; done | wc -l)
   jq -cn --arg vm "$vm" --arg access "$access" --arg version "$(version)" --arg mode "$mode" \
     --argjson installed "$installed" --argjson windows "${n:-0}" --argjson desktop "$desktop" \
-    --arg ram "${ram:-}" --arg cores "${cores:-}" \
+    --arg ram "${ram:-}" --arg cores "${cores:-}" --argjson shares "${shared:-[]}" --argjson undecided "$undecided" \
     --argjson idle "$(idle_minutes)" --argjson deadline "${deadline:-0}" \
     --argjson now "$(date +%s)" --argjson apps "${apps:-[]}" \
     '{version: $version, installed: $installed, vm: $vm, mode: $mode, access: $access, windows: $windows, desktop: $desktop,
-      ram: $ram, cores: $cores,
+      ram: $ram, cores: $cores, shares: $shares, undecided: $undecided,
       idleMinutes: $idle, idleDeadline: $deadline, now: $now, apps: $apps}'
 }
 

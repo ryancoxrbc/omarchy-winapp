@@ -4,10 +4,12 @@
 #   registry  [{key, name, type, value}]   per-user settings an app needs
 #   remoteapp true                         let RemoteApp start any program
 #   smbCache  true                         stop Windows caching the ~/Windows share's listings
-#   pin       ["\\tsclient\home", ...]     pin folders to Quick access
+#   pin       ["\\tsclient\work", ...]     pin folders to Quick access, and unpin the redirected
+#                                          folders (\\tsclient\...) that are not in the list
 #   frame     {stamp, titleBars, roundedCorners, keep[]}
 #                                          build the program apps are started through, and its settings
-#   tune      {console, trim}              whether the console signs in at boot; search indexer and Widgets off
+#   tune      {fast, trim}                 no sign-in on the console at boot; search indexer and Widgets off.
+#                                          Each is true (do it), false (undo it) or null (leave Windows as it is)
 # The result always reports the Windows version and the RemoteApp policy.
 
 $job = Read-Job
@@ -161,10 +163,16 @@ if ($job.smbCache) {
   } catch { $result.smbCache = "failed: $($_.Exception.Message)" }
 }
 
-if ($job.pin) {
+if ($null -ne $job.pin) {
   $pinned = 0
   $shell = New-Object -ComObject Shell.Application
   $quick = $shell.Namespace('shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}')
+  # a folder that is no longer shared would sit there as a dead entry
+  foreach ($item in @($quick.Items())) {
+    if ($item.Path -like '\\tsclient\*' -and @($job.pin) -notcontains $item.Path) {
+      try { $item.InvokeVerb('unpinfromhome'); $pinned++ } catch { }
+    }
+  }
   $already = @($quick.Items() | ForEach-Object { $_.Path })
   foreach ($folder in $job.pin) {
     if ($already -contains $folder) { continue }
@@ -211,9 +219,10 @@ if ($job.frame) {
 }
 
 if ($null -ne $job.tune) {
-  # Each of these keeps what Windows was set to before under HKLM\SOFTWARE\winapp
-  # and puts it back when the setting is switched off again; one that was
-  # already as wanted is not winapp's to restore, and is left alone then.
+  # Each of these is the user's choice: true makes the change, false undoes it,
+  # and null (not decided) leaves Windows as it is. What Windows was set to
+  # before is kept under HKLM\SOFTWARE\winapp and put back on false; a setting
+  # that was already as wanted is not winapp's to restore, and is left alone.
   $tune = [ordered]@{}
   $kept = 'HKLM:\SOFTWARE\winapp'
   # not New-Item -Force: on a key that exists it empties it
@@ -230,12 +239,12 @@ if ($null -ne $job.tune) {
   try {
     $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
     $now = [string](Get-ItemProperty -Path $winlogon).AutoAdminLogon
-    if (-not $job.tune.console) {
+    if ($job.tune.fast -eq $true) {
       if ($now -eq '1') {
         Keep 'AutoAdminLogon' $now
         Set-ItemProperty -Path $winlogon -Name AutoAdminLogon -Value '0'
       }
-    } elseif ($null -ne (Kept 'AutoAdminLogon')) {
+    } elseif ($job.tune.fast -eq $false -and $null -ne (Kept 'AutoAdminLogon')) {
       Set-ItemProperty -Path $winlogon -Name AutoAdminLogon -Value ([string](Kept 'AutoAdminLogon'))
       Forget 'AutoAdminLogon'
     }
@@ -248,13 +257,13 @@ if ($null -ne $job.tune) {
   try {
     $service = 'HKLM:\SYSTEM\CurrentControlSet\Services\WSearch'
     $start = (Get-ItemProperty -Path $service -ErrorAction Stop).Start
-    if ($job.tune.trim) {
+    if ($job.tune.trim -eq $true) {
       if ($start -ne 4) {
         Keep 'WSearchStart' $start
         Set-ItemProperty -Path $service -Name Start -Value 4
         Stop-Service -Name WSearch -Force -ErrorAction SilentlyContinue
       }
-    } elseif ($null -ne (Kept 'WSearchStart')) {
+    } elseif ($job.tune.trim -eq $false -and $null -ne (Kept 'WSearchStart')) {
       Set-ItemProperty -Path $service -Name Start -Value ([int](Kept 'WSearchStart'))
       Forget 'WSearchStart'
     }
@@ -266,13 +275,13 @@ if ($null -ne $job.tune) {
   try {
     $policy = 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh'
     $allowed = (Get-ItemProperty -Path $policy -Name AllowNewsAndInterests -ErrorAction SilentlyContinue).AllowNewsAndInterests
-    if ($job.tune.trim) {
+    if ($job.tune.trim -eq $true) {
       if ($allowed -ne 0) {
         Keep 'Widgets' $(if ($null -eq $allowed) { 'unset' } else { [string]$allowed })
         if (-not (Test-Path -Path $policy)) { New-Item -Path $policy | Out-Null }
         Set-ItemProperty -Path $policy -Name AllowNewsAndInterests -Value 0 -Type DWord
       }
-    } elseif ($null -ne (Kept 'Widgets')) {
+    } elseif ($job.tune.trim -eq $false -and $null -ne (Kept 'Widgets')) {
       if ((Kept 'Widgets') -eq 'unset') {
         Remove-ItemProperty -Path $policy -Name AllowNewsAndInterests -ErrorAction SilentlyContinue
       } else {

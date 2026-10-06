@@ -11,9 +11,7 @@ ensure_config() {
 {
   "mode": "cold",
   "idleMinutes": 5,
-  "shares": [
-    { "name": "home", "path": "~" }
-  ],
+  "shares": [],
   "scale": "auto",
   "pointerScale": "auto",
   "windowsSuffix": "auto",
@@ -21,8 +19,6 @@ ensure_config() {
   "superKey": "linux",
   "titleBars": false,
   "roundedCorners": false,
-  "consoleSignIn": false,
-  "trimWindows": true,
   "rdpArgs": []
 }
 EOF

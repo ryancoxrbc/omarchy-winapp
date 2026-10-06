@@ -72,7 +72,7 @@ Things that were learned the hard way and are handled:
   console leaves Remote Desktop Services stuck for a minute. Nothing outside
   Windows shows when that sign-in is over, so the wait was for dockur's
   "Windows started successfully", which is a fixed 30 seconds.
-  winapp therefore switches the console sign-in off (see
+  So winapp offers to switch the console sign-in off (see
   [what is changed in Windows](#what-is-changed-in-windows)). With nobody on
   the console there is nothing to claim and nothing to wait for: the app's own
   logon is the first, made the moment Windows answers on the RDP port. On the
@@ -214,32 +214,44 @@ and `winapp doctor --deep` says why.
 
 ## What is changed in Windows
 
-`winapp setup` makes a few changes inside the VM, and the first app opened
-after an update brings them up to date:
+`winapp changes` lists all of it. There are two kinds.
 
-- RemoteApp may start any program, the `~/Windows` share shows Linux-side
-  changes at once, and your shared folders are pinned to Quick access.
-- **Nobody is signed in on the console at boot** (`AutoAdminLogon`), for the
-  reason given above. The full desktop still opens with `winapp desktop` and
-  from Omarchy's *Windows* launcher, which sign in themselves. The web console
-  on port 8006 shows Windows' sign-in screen instead of a desktop; the account
-  is the one in `~/.config/windows/credentials`. `"consoleSignIn": true` in
-  `config.json` puts the sign-in back, and the slower start with it.
-- **The search indexer and Widgets are off.** Neither does anything for an
-  app shown on its own, and both run in the background after every boot.
-  Measured, they make no difference to how fast an app opens; they are off to
-  leave the VM's processors and disk alone. `"trimWindows": false` puts both
-  back.
+What every install needs, made by `winapp setup`: RemoteApp may start any
+program, the `~/Windows` share shows Linux-side changes at once, your shared
+folders are pinned to Quick access, and the frame program is built.
 
-What Windows was set to before is kept (under `HKLM\SOFTWARE\winapp`) and
-restored when a setting is switched off again. Nothing else is touched: no
-service beyond the indexer, nothing of Defender's, no update setting.
+What is yours to decide. Neither is made until you have said yes:
+
+- **Start Windows faster** (`fastStart`): nobody is signed in on the console
+  at boot (`AutoAdminLogon`), for the reason given above. The full desktop
+  still opens with `winapp desktop` and from Omarchy's *Windows* launcher,
+  which sign in themselves. The web console on port 8006 shows Windows'
+  sign-in screen instead of a desktop; the account is the one in
+  `~/.config/windows/credentials`.
+- **Search indexer and Widgets off** (`trimWindows`). Neither does anything
+  for an app shown on its own, and both run in the background after every
+  boot. Measured, they make no difference to how fast an app opens; switching
+  them off leaves the VM's processors and disk alone.
+
+The question is put once: in `winapp setup` when you run it in a terminal,
+otherwise as a notification the first time you open an app, with three
+answers. *Yes* makes the change with the next app opened while no other is
+open. *Don't ask again* is a no. *Not now*, or no answer, leaves Windows as it
+is and asks again in a week. A later version that wants another change asks
+for that one the same way. While a question is open the panel has a *Changes
+to Windows* row for it. An answer can be changed at any time with
+`winapp changes allow|deny|ask <fast|trim>`.
+
+What Windows was set to before a change is kept (under `HKLM\SOFTWARE\winapp`)
+and restored when the answer becomes no. Nothing else is touched: no service
+beyond the indexer, nothing of Defender's, no update setting.
 
 ## Files are redirected, not shared
 
 FreeRDP's drive redirection makes a Linux folder appear in the session as
 `\\tsclient\<name>`. winapp redirects the folders listed under `shares` in
-`config.json` (your home folder by default) into every session, translates the
+`config.json` into every session (none until you choose some: whatever is
+shared, every program in Windows can read and change), translates the
 path of the file you opened, and hands that to the app.
 
 A file that no share covers gets a drive of its own: the whole disk when it is

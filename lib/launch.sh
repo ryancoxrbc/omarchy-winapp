@@ -181,6 +181,7 @@ launch() {
   exe=${exe//\//\\} # the config may use either slash
   desktop_open && die "$DESKTOP_IN_THE_WAY"
   mkdir -p "$RUN_DIR/clients"
+  changes_ask
   if with_lock launch session_start "$exe" "$cmdline"; then return 0; fi
   for _ in 1 2 3; do
     vm_up "The app opens when the VM is up."
@@ -255,9 +256,11 @@ cmd_open() { # winapp open <file>: whatever Windows opens that file type with
   launch open "$(basename -- "$p")" 'C:\Windows\System32\rundll32.exe' "url.dll,FileProtocolHandler $w"
 }
 
-cmd_explorer() { # winapp explorer [folder]
-  local p w
-  p=$(local_path "${1:-$HOME}") && [[ -d $p ]] || die "no such folder: ${1:-$HOME}"
+cmd_explorer() { # winapp explorer [folder]: the first shared folder when none is given
+  local p w first
+  first=$(shares | head -n1 | cut -f2)
+  [[ -n ${1:-$first} ]] || die "no folder is shared yet; name one (winapp explorer <folder>) or choose some: winapp share pick"
+  p=$(local_path "${1:-$first}") && [[ -d $p ]] || die "no such folder: ${1:-$first}"
   w=$(win_path "$p") || exit 1
   launch explorer "Windows Explorer" 'C:\Windows\explorer.exe' "\"$w\""
 }

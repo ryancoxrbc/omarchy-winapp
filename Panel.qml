@@ -35,6 +35,8 @@ Panel {
   readonly property string glyphApps: String.fromCodePoint(0xF003B)
   readonly property string glyphInstall: String.fromCodePoint(0xF01DA)
   readonly property string glyphChip: String.fromCodePoint(0xF035B)
+  readonly property string glyphFolder: String.fromCodePoint(0xF024B)
+  readonly property string glyphTune: String.fromCodePoint(0xF062E)
 
   // --- state, as reported by `winapp state` -----------------------------------
   property bool installed: true
@@ -49,6 +51,8 @@ Panel {
   property var apps: []
   property string ram: ""              // "16G", empty when not known
   property string cores: ""
+  property var shares: []              // names of the folders shared with Windows
+  property int undecided: 0            // changes to Windows waiting for an answer
   property string lastError: ""
   // What was just asked for, until the helper's own state catches up.
   property string pending: ""          // "" | "start" | "stop"
@@ -85,8 +89,10 @@ Panel {
     list.push({ "kind": "desktop" })
     list.push({ "kind": "manage" })
     list.push({ "kind": "resources" })
-    list.push({ "kind": "mode" })
+    list.push({ "kind": "shares" })
+    if (undecided > 0) list.push({ "kind": "changes" })
     if (mode !== "warm") list.push({ "kind": "idle" })
+    list.push({ "kind": "mode" })
     return list
   }
   property int cursor: 0
@@ -134,6 +140,8 @@ Panel {
     else if (row.kind === "desktop") openDesktop()
     else if (row.kind === "manage") manageApps()
     else if (row.kind === "resources") changeResources()
+    else if (row.kind === "shares") pickShares()
+    else if (row.kind === "changes") reviewChanges()
     else if (row.kind === "mode") setMode(modeOptions[modeCursor].value)
     else if (row.kind === "idle") setIdle(idleOptions[idleCursor].value)
     else if (row.kind === "install") installVm()
@@ -185,6 +193,8 @@ Panel {
     desktop = parsed.desktop === true
     ram = String(parsed.ram || "")
     cores = String(parsed.cores || "")
+    if (JSON.stringify(parsed.shares || []) !== JSON.stringify(shares)) shares = parsed.shares || []
+    undecided = parsed.undecided || 0
     mode = parsed.mode === "warm" ? "warm" : "cold"
     idleMinutes = parsed.idleMinutes
     idleDeadline = parsed.idleDeadline || 0
@@ -256,6 +266,16 @@ Panel {
 
   function manageApps() { inTerminal(shellQuote(win.command) + " manage") }
   function changeResources() { inTerminal(shellQuote(win.command) + " resources --pick") }
+  function pickShares() { inTerminal(shellQuote(win.command) + " share pick") }
+  function reviewChanges() { inTerminal(shellQuote(win.command) + " changes") }
+
+  function sharesText() {
+    if (shares.length === 0) return "None: only the folder of each file you open"
+    return shares.join(", ")
+  }
+  function changesText() {
+    return undecided + (undecided === 1 ? " question" : " questions") + " waiting for your answer"
+  }
 
   function resourcesText() {
     if (ram === "" || cores === "") return "How much of this computer Windows gets"
@@ -643,12 +663,62 @@ Panel {
                 subtitle: win.resourcesText()
                 onActivated: win.changeResources()
               }
+
+              ActionRow {
+                width: parent.width
+                kind: "shares"
+                glyph: win.glyphFolder
+                title: "Shared folders"
+                subtitle: win.sharesText()
+                onActivated: win.pickShares()
+              }
+
+              // Only while a question is open: the panel is as tall as it
+              // can be, and `winapp changes` is there for a change of mind.
+              ActionRow {
+                visible: win.undecided > 0
+                width: parent.width
+                kind: "changes"
+                glyph: win.glyphTune
+                title: "Changes to Windows"
+                subtitle: win.changesText()
+                onActivated: win.reviewChanges()
+              }
             }
           }
 
           PanelSeparator {
             visible: win.installed
             foreground: win.foreground
+          }
+
+          Column {
+            visible: win.installed && win.mode !== "warm"
+            width: parent.width
+            spacing: Style.space(10)
+
+            PanelSectionHeader {
+              text: "STOP WHEN IDLE FOR"
+              foreground: win.foreground
+              fontFamily: win.fontFamily
+            }
+
+            ButtonGroup {
+              options: win.idleOptions
+              value: String(win.idleMinutes)
+              cursorIndex: win.cursorOn("idle") ? win.idleCursor : -1
+              foreground: win.foreground
+              fontFamily: win.fontFamily
+              fontSize: Style.font.caption
+              focusable: false
+              spacing: Style.spacing.xs
+              onChanged: function(value) { win.setIdle(value) }
+              onHovered: function(index, isHovered) {
+                if (!isHovered) return
+                win.setCursor("idle")
+                win.idleCursor = index
+              }
+            }
           }
 
           Column {
@@ -687,35 +757,6 @@ Panel {
               font.family: win.fontFamily
               font.pixelSize: Style.font.bodySmall
               wrapMode: Text.WordWrap
-            }
-          }
-
-          Column {
-            visible: win.installed && win.mode !== "warm"
-            width: parent.width
-            spacing: Style.space(10)
-
-            PanelSectionHeader {
-              text: "STOP WHEN IDLE FOR"
-              foreground: win.foreground
-              fontFamily: win.fontFamily
-            }
-
-            ButtonGroup {
-              options: win.idleOptions
-              value: String(win.idleMinutes)
-              cursorIndex: win.cursorOn("idle") ? win.idleCursor : -1
-              foreground: win.foreground
-              fontFamily: win.fontFamily
-              fontSize: Style.font.caption
-              focusable: false
-              spacing: Style.spacing.xs
-              onChanged: function(value) { win.setIdle(value) }
-              onHovered: function(index, isHovered) {
-                if (!isHovered) return
-                win.setCursor("idle")
-                win.idleCursor = index
-              }
             }
           }
         }

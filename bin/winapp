@@ -50,8 +50,13 @@ Windows
 
 Folders
   winapp shares                Linux folders Windows can reach
+  winapp share pick            tick the folders to share
   winapp share add <name> <folder>     share one (as \\tsclient\<name>)
   winapp share remove <name>
+
+Inside Windows
+  winapp changes               what winapp changes in Windows, and your say in it
+  winapp changes allow|deny|ask <fast|trim>
 
 Setup
   winapp setup                 install or repair everything
@@ -121,7 +126,9 @@ setup) shift; cmd_setup "$@" ;;
 doctor) shift; cmd_doctor "$@" ;;
 logs) cmd_logs "${2:-}" ;;
 uninstall) shift; cmd_uninstall "$@" ;;
+changes) shift; cmd_changes "$@" ;;
 __idle) cmd___idle "${2:-}" "${3:-0}" ;;
+__ask) cmd___ask ;;
 -*) die "unknown option: $1 (see: winapp help)" ;;
 *) cmd_app "$@" ;;
 esac

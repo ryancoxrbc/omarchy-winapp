@@ -140,10 +140,10 @@ cmd_doctor() {
       fi
       if console_free; then
         ok "nobody is signed in on the console: the first app does not wait for that"
-      elif [[ $(cfg .consoleSignIn false) == true ]]; then
-        say "  · Windows signs in on its console at boot (consoleSignIn in config.json): the first app waits half a minute for that"
-      else
+      elif [[ $(change_state fast) == yes ]]; then
         note "Windows still signs in on its console at boot" "the first app waits half a minute for that; see the newest guest log in $LOG_DIR"
+      else
+        say "  · Windows signs in on its console at boot, so the first app waits half a minute (to change that: winapp changes)"
       fi
     else
       bad "$GUEST_ERROR"
