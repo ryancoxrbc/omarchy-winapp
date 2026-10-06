@@ -1,5 +1,46 @@
 # Changelog
 
+## 2.3.0 - 2026-10-06
+
+### Added
+
+- Cold or warm start-up, in the panel and as `winapp mode cold|warm`. Cold is
+  what there was: Windows starts when you open an app and stops when idle.
+  Warm starts it when you log in and keeps it on, so every app opens in about
+  3 seconds, at the price of the VM's memory being held all the time. The
+  panel says so, with your VM's own figure. Stopping Windows by hand still
+  works when warm; it then stays off until you open an app or log in again.
+
+### Changed
+
+- The first app after starting Windows opens much sooner: measured with Word,
+  13 seconds from a stopped VM instead of 41. Thirty of those seconds were a
+  fixed wait, needed only because Windows signed in on its own console at
+  every boot. winapp now switches that sign-in off inside the VM and makes the
+  app's logon the first one, the moment Windows listens. The change is applied
+  with the first app opened after updating, and is in effect from the start
+  after that one. `"consoleSignIn": true` in `config.json` keeps the old
+  behaviour. The web console on port 8006 now shows Windows' sign-in screen;
+  `winapp desktop` and Omarchy's *Windows* launcher work as before.
+- An app opened while another is open is started inside the session that is
+  already there: under a second, without a second logon.
+- Windows' search indexer and Widgets are switched off in the VM.
+  `"trimWindows": false` puts them back.
+
+### Fixed
+
+- The mouse pointer over Windows app windows is no longer too large on a
+  scaled monitor (twice the size at 200%). Windows drew it at the monitor's
+  scale and the desktop then enlarged it again; it is now reduced by that
+  scale first. `"pointerScale": 100` in `config.json` switches this off. (#3)
+- Windows' empty helper windows, such as the ones an embedded Internet
+  Explorer control keeps, are no longer shown at all. They were harmless since
+  2.0.1 but still listed among the desktop's windows, with an icon each in
+  workspace indicators. (#1)
+- Opening a second document no longer pulls the windows that are already open
+  onto the workspace in view. They stay where they are; when a new connection
+  cannot be avoided (a file outside every shared folder), they are put back.
+
 ## 2.2.0 - 2026-10-05
 
 ### Added

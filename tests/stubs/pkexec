@@ -3,6 +3,6 @@ out=${STUB_OUT:?}
 echo "pkexec $*" >>"$out/pkexec.calls"
 case "$*" in
 *"__priv write_compose") cat >"$out/compose.written" ;;
-*"__priv up_wait") : >"$out/vm-running" ;;
+*"__priv up_wait" | *"__priv up") : >"$out/vm-running" ;;
 *"__priv down") rm -f "$out/vm-running" ;;
 esac

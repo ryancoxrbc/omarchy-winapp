@@ -7,6 +7,7 @@
 #   pin       ["\\tsclient\home", ...]     pin folders to Quick access
 #   frame     {stamp, titleBars, roundedCorners, keep[]}
 #                                          build the program apps are started through, and its settings
+#   tune      {console, trim}              whether the console signs in at boot; search indexer and Widgets off
 # The result always reports the Windows version and the RemoteApp policy.
 
 $job = Read-Job
@@ -207,6 +208,82 @@ if ($job.frame) {
     $frame.status = 'ok'
   } catch { $frame.status = "failed: $($_.Exception.Message)" }
   $result.frame = $frame
+}
+
+if ($null -ne $job.tune) {
+  # Each of these keeps what Windows was set to before under HKLM\SOFTWARE\winapp
+  # and puts it back when the setting is switched off again; one that was
+  # already as wanted is not winapp's to restore, and is left alone then.
+  $tune = [ordered]@{}
+  $kept = 'HKLM:\SOFTWARE\winapp'
+  # not New-Item -Force: on a key that exists it empties it
+  if (-not (Test-Path -Path $kept)) { New-Item -Path $kept | Out-Null }
+  function Kept($name) { (Get-ItemProperty -Path $kept -Name $name -ErrorAction SilentlyContinue).$name }
+  function Keep($name, $value) { Set-ItemProperty -Path $kept -Name $name -Value $value }
+  function Forget($name) { Remove-ItemProperty -Path $kept -Name $name -ErrorAction SilentlyContinue }
+
+  # The console. As dockur installs Windows it signs the user in there at
+  # every boot, on a desktop that nobody looks at. A single-app logon cannot
+  # take that session over, and winapp then has to wait for the sign-in to
+  # finish and claim the session with a logon of its own before every first
+  # app. With nobody signed in there is nothing to wait for.
+  try {
+    $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+    $now = [string](Get-ItemProperty -Path $winlogon).AutoAdminLogon
+    if (-not $job.tune.console) {
+      if ($now -eq '1') {
+        Keep 'AutoAdminLogon' $now
+        Set-ItemProperty -Path $winlogon -Name AutoAdminLogon -Value '0'
+      }
+    } elseif ($null -ne (Kept 'AutoAdminLogon')) {
+      Set-ItemProperty -Path $winlogon -Name AutoAdminLogon -Value ([string](Kept 'AutoAdminLogon'))
+      Forget 'AutoAdminLogon'
+    }
+    $tune.console = ([string](Get-ItemProperty -Path $winlogon).AutoAdminLogon -eq '1')
+  } catch { $tune.console = $true; $tune.consoleError = $_.Exception.Message }
+
+  # The search indexer: nothing here searches from the Start menu, and it
+  # reads the disk in the background after every boot. The service's start
+  # type is 4 for disabled.
+  try {
+    $service = 'HKLM:\SYSTEM\CurrentControlSet\Services\WSearch'
+    $start = (Get-ItemProperty -Path $service -ErrorAction Stop).Start
+    if ($job.tune.trim) {
+      if ($start -ne 4) {
+        Keep 'WSearchStart' $start
+        Set-ItemProperty -Path $service -Name Start -Value 4
+        Stop-Service -Name WSearch -Force -ErrorAction SilentlyContinue
+      }
+    } elseif ($null -ne (Kept 'WSearchStart')) {
+      Set-ItemProperty -Path $service -Name Start -Value ([int](Kept 'WSearchStart'))
+      Forget 'WSearchStart'
+    }
+    $tune.search = [int](Get-ItemProperty -Path $service).Start
+  } catch { $tune.search = "failed: $($_.Exception.Message)" }
+
+  # Widgets: Windows starts them, and the browser they run in, in every
+  # session, a single app's included.
+  try {
+    $policy = 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh'
+    $allowed = (Get-ItemProperty -Path $policy -Name AllowNewsAndInterests -ErrorAction SilentlyContinue).AllowNewsAndInterests
+    if ($job.tune.trim) {
+      if ($allowed -ne 0) {
+        Keep 'Widgets' $(if ($null -eq $allowed) { 'unset' } else { [string]$allowed })
+        if (-not (Test-Path -Path $policy)) { New-Item -Path $policy | Out-Null }
+        Set-ItemProperty -Path $policy -Name AllowNewsAndInterests -Value 0 -Type DWord
+      }
+    } elseif ($null -ne (Kept 'Widgets')) {
+      if ((Kept 'Widgets') -eq 'unset') {
+        Remove-ItemProperty -Path $policy -Name AllowNewsAndInterests -ErrorAction SilentlyContinue
+      } else {
+        Set-ItemProperty -Path $policy -Name AllowNewsAndInterests -Value ([int](Kept 'Widgets')) -Type DWord
+      }
+      Forget 'Widgets'
+    }
+    $tune.widgets = (Get-ItemProperty -Path $policy -Name AllowNewsAndInterests -ErrorAction SilentlyContinue).AllowNewsAndInterests
+  } catch { $tune.widgets = "failed: $($_.Exception.Message)" }
+
+  $result.tune = $tune
 }
 
 # --- always --------------------------------------------------------------------

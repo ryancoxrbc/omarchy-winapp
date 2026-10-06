@@ -42,6 +42,18 @@ file or, where that cannot be read, from the size of the disk image, and the
 command refuses rather than guess: dockur would take a larger figure as a
 request to grow the disk.
 
+## Cold or warm
+
+Cold, the VM is started by the first app and stopped by a timer once the last
+window has been closed for a while. Warm (`winapp mode warm`, or the panel),
+there is no timer, and the VM is started once per login: by the first
+`winapp state`, which the bar widget asks for as soon as it is up. Once, so
+that stopping Windows by hand holds until the next app or the next login.
+What warm costs is memory: Windows touches all it is given soon after it
+boots, so the VM holds its full allowance for as long as it runs. After a
+reboot of the computer, the start asks for your password like any other first
+start does, this time at login.
+
 ## Apps are RemoteApp sessions
 
 An app is started with FreeRDP in RemoteApp mode: one RDP connection that shows
@@ -51,17 +63,43 @@ it installs it (`fAllowUnlistedRemotePrograms`, `fDisabledAllowList`), and
 
 Things that were learned the hard way and are handled:
 
-- **The first logon after a boot.** Windows signs the VM's user in on its
-  console at boot, and a RemoteApp logon cannot take a console session over; it
-  is refused (`LOGON_MSG_BUMP_OPTIONS`) and FreeRDP shows a Windows prompt in a
-  bare window instead. So once per boot winapp makes one ordinary, windowless
-  logon first. If the VM was restarted behind its back it notices the refusal,
-  does that logon, and tries again.
-- **One session.** A second RemoteApp connection by the same user takes over
-  the first one's session: the windows move to the new connection and the old
-  client is disconnected. That is how a second app opens. Two launches made at
-  the same instant are serialised so the first has asked for its app before the
-  second takes over.
+- **The first logon after a boot.** As dockur installs it, Windows signs the
+  VM's user in on its console at every boot, on a desktop nobody looks at. A
+  RemoteApp logon cannot take a console session over; it is refused
+  (`LOGON_MSG_BUMP_OPTIONS`) and FreeRDP shows a Windows prompt in a bare
+  window instead. An ordinary, windowless logon first claims that session, but
+  it has to wait: one that arrives while Windows is still signing in on the
+  console leaves Remote Desktop Services stuck for a minute. Nothing outside
+  Windows shows when that sign-in is over, so the wait was for dockur's
+  "Windows started successfully", which is a fixed 30 seconds.
+  winapp therefore switches the console sign-in off (see
+  [what is changed in Windows](#what-is-changed-in-windows)). With nobody on
+  the console there is nothing to claim and nothing to wait for: the app's own
+  logon is the first, made the moment Windows answers on the RDP port. On the
+  machine this was measured on, Word's window is up 13 seconds after a cold
+  start instead of 41. Should a logon be refused after all, winapp claims the
+  session the old way, retries, and goes back to waiting until the setting has
+  been applied again.
+- **Is Windows listening?** Docker accepts connections on the published RDP
+  port from the moment the container starts, long before Windows does, so an
+  open port says nothing. winapp sends the protocol's first packet, a
+  connection request, and looks for Windows' confirmation. Nobody is signed in
+  by that.
+- **One session, and the next app.** A second RemoteApp connection by the same
+  user takes over the first one's session: every window moves to the new
+  connection and is shown anew, and the old client is disconnected. So the
+  next app is not started by a connection at all when it can be helped. The
+  [frame program](#window-frames) that runs in the session watches a folder
+  redirected for the purpose (`\\tsclient\winappq`), winapp writes the command
+  line there, and the program starts it: under a second, no logon, and the
+  windows that are open stay as and where they are. Taking a request is a
+  rename, which only one side can win, so a request nobody takes within three
+  seconds is withdrawn and a connection made instead. That is also what
+  happens for a file no redirected folder of the open session reaches, since a
+  connection cannot be given another folder later. The windows a new
+  connection takes over are then put back on the workspaces they were on; they
+  would otherwise all land on the one in view. Two launches made at the same
+  instant are serialised.
 - **Desktop or apps.** A desktop edition of Windows keeps one session
   connected at a time. The full desktop is the console session and apps run in
   another, so while one is connected a logon to the other is refused (or, for
@@ -109,13 +147,28 @@ window opens.
 (`LD_PRELOAD`). For unmanaged windows only, it changes the label to the one
 xfreerdp itself first picks for them, which compositors do not focus, and
 withholds geometry notifications, since Windows alone decides where such a
-window is. Ordinary windows are untouched. It is compiled from the source in
+window is. One that Windows keeps at 0x0 is not shown at all until Windows
+gives it a size: mapped, it would be listed among the desktop's windows and
+get an icon in workspace indicators. Ordinary windows are untouched. It is compiled from the source in
 the plugin the first time an app is opened, and again when that source changes;
 `"helperWindowFix": false` in `config.json` switches it off.
 
 The behaviour is reported to FreeRDP as
 [FreeRDP/FreeRDP#13610](https://github.com/FreeRDP/FreeRDP/issues/13610); once
 a release with a fix is in use, the shim has nothing left to do and can go.
+
+## The mouse pointer
+
+On a scaled monitor Windows is asked to draw at that scale itself, because
+Hyprland leaves X11 windows unscaled. At 200% it therefore sends a pointer
+twice the size, which xfreerdp hands to X as it comes. But the desktop shows
+an X11 program's pointer enlarged by the monitor's scale whatever it does with
+the windows (that is why an ordinary X11 program's 24 pixel pointer looks
+right), so the Windows pointer came out scaled twice. The same shim reduces
+each pointer picture by the monitor's scale before X gets it. Measured at
+160%: the arrow went from 42 pixels tall to 26, with its tip where it was.
+`"pointerScale"` in `config.json` sets the percentage by hand; `100` leaves
+the pointer as Windows draws it.
 
 ## The Super key
 
@@ -148,6 +201,9 @@ A program that draws its own title bar, as Office does, has nothing here to
 remove: its name and buttons are part of the program. It still gets square
 corners.
 
+While it is there it also starts the next app winapp asks for, as described
+under "One session, and the next app" above.
+
 The program does nothing unless winapp starts an app through it, keeps no
 state, and leaves when the session disconnects. `"titleBars": true` and
 `"roundedCorners": true` in `config.json` leave either to Windows, and
@@ -155,6 +211,29 @@ state, and leaves when the session disconnects. `"titleBars": true` and
 change reaches Windows with the next app opened while no other is open. If the
 program cannot be built or started, apps open as they did before it existed,
 and `winapp doctor --deep` says why.
+
+## What is changed in Windows
+
+`winapp setup` makes a few changes inside the VM, and the first app opened
+after an update brings them up to date:
+
+- RemoteApp may start any program, the `~/Windows` share shows Linux-side
+  changes at once, and your shared folders are pinned to Quick access.
+- **Nobody is signed in on the console at boot** (`AutoAdminLogon`), for the
+  reason given above. The full desktop still opens with `winapp desktop` and
+  from Omarchy's *Windows* launcher, which sign in themselves. The web console
+  on port 8006 shows Windows' sign-in screen instead of a desktop; the account
+  is the one in `~/.config/windows/credentials`. `"consoleSignIn": true` in
+  `config.json` puts the sign-in back, and the slower start with it.
+- **The search indexer and Widgets are off.** Neither does anything for an
+  app shown on its own, and both run in the background after every boot.
+  Measured, they make no difference to how fast an app opens; they are off to
+  leave the VM's processors and disk alone. `"trimWindows": false` puts both
+  back.
+
+What Windows was set to before is kept (under `HKLM\SOFTWARE\winapp`) and
+restored when a setting is switched off again. Nothing else is touched: no
+service beyond the indexer, nothing of Defender's, no update setting.
 
 ## Files are redirected, not shared
 
@@ -218,5 +297,6 @@ in `mimeapps.list`, and nothing else.
 | `~/.local/share/winapp/icons/` | fetched icons |
 | `~/.cache/winapp/` | the last scan |
 | `~/.local/state/winapp/log/` | the last 20 session logs |
-| `$XDG_RUNTIME_DIR/winapp/` | pid files, the idle countdown, locks |
+| `$XDG_RUNTIME_DIR/winapp/` | pid files, the idle countdown, locks, requests to an open session |
 | `C:\ProgramData\winapp\` (in the VM) | the window-frame program and its settings |
+| `HKLM\SOFTWARE\winapp` (in the VM) | what Windows was set to before winapp changed it |

@@ -8,8 +8,8 @@ import qs.Ui
 
 // Bar widget for the Windows VM behind the bundled `winapp` command. The icon
 // is dim while the VM is off; the panel opens Windows apps (booting the VM
-// first when needed), switches the VM on and off, and sets how long it lingers
-// after the last app window closes. Everything it shows comes from
+// first when needed), switches the VM on and off, and sets whether Windows is
+// kept on from login (warm) or started for an app and stopped when idle (cold). Everything it shows comes from
 // `winapp state`, and everything it does is a `winapp` command.
 Panel {
   id: win
@@ -41,6 +41,7 @@ Panel {
   property string vm: "stopped"        // stopped | starting | running | stopping
   property int windows: 0
   property bool desktop: false         // the full desktop is open; apps cannot be
+  property string mode: "cold"         // cold: started for an app | warm: kept on from login
   property int idleMinutes: 5
   property real idleDeadline: 0        // epoch seconds, 0 = no countdown
   property real clockOffset: 0         // helper clock minus ours, in seconds
@@ -56,6 +57,11 @@ Panel {
   readonly property bool off: vm === "stopped" && pending !== "start"
   readonly property bool busy: vm === "starting" || vm === "stopping" || pending !== ""
   readonly property bool on: !off && vm !== "stopping" && pending !== "stop"
+
+  readonly property var modeOptions: [
+    { "value": "cold", "label": "Cold" },
+    { "value": "warm", "label": "Warm" }
+  ]
 
   readonly property var idleOptions: [
     { "value": "1", "label": "1m" },
@@ -79,12 +85,14 @@ Panel {
     list.push({ "kind": "desktop" })
     list.push({ "kind": "manage" })
     list.push({ "kind": "resources" })
-    list.push({ "kind": "idle" })
+    list.push({ "kind": "mode" })
+    if (mode !== "warm") list.push({ "kind": "idle" })
     return list
   }
   property int cursor: 0
   property bool cursorActive: false
   property int idleCursor: 0
+  property int modeCursor: 0
 
   function cursorOn(kind, index) {
     if (!cursorActive || cursor < 0 || cursor >= rows.length) return false
@@ -107,9 +115,12 @@ Panel {
     if (dy !== 0) {
       cursor = Math.max(0, Math.min(rows.length - 1, cursor + dy))
       if (cursorOn("idle")) idleCursor = selectedIdleIndex()
+      if (cursorOn("mode")) modeCursor = mode === "warm" ? 1 : 0
       scrollCursorIntoView()
     } else if (dx !== 0 && cursorOn("idle")) {
       idleCursor = Math.max(0, Math.min(idleOptions.length - 1, idleCursor + dx))
+    } else if (dx !== 0 && cursorOn("mode")) {
+      modeCursor = Math.max(0, Math.min(modeOptions.length - 1, modeCursor + dx))
     }
   }
 
@@ -123,6 +134,7 @@ Panel {
     else if (row.kind === "desktop") openDesktop()
     else if (row.kind === "manage") manageApps()
     else if (row.kind === "resources") changeResources()
+    else if (row.kind === "mode") setMode(modeOptions[modeCursor].value)
     else if (row.kind === "idle") setIdle(idleOptions[idleCursor].value)
     else if (row.kind === "install") installVm()
   }
@@ -133,7 +145,13 @@ Panel {
   }
 
   function scrollCursorIntoView() {
-    if (!panelFlick || cursor < 0 || cursor >= rows.length || rows[cursor].kind !== "app") return
+    if (!panelFlick || cursor < 0 || cursor >= rows.length) return
+    if (rows[cursor].kind === "mode" || rows[cursor].kind === "idle") {
+      // the last sections: all the way down shows them whole
+      Qt.callLater(function() { panelFlick.contentY = Math.max(0, panelFlick.contentHeight - panelFlick.height) })
+      return
+    }
+    if (rows[cursor].kind !== "app") return
     var item = appColumn.children[rows[cursor].index]
     if (!item) return
     Qt.callLater(function() {
@@ -167,6 +185,7 @@ Panel {
     desktop = parsed.desktop === true
     ram = String(parsed.ram || "")
     cores = String(parsed.cores || "")
+    mode = parsed.mode === "warm" ? "warm" : "cold"
     idleMinutes = parsed.idleMinutes
     idleDeadline = parsed.idleDeadline || 0
     clockOffset = (parsed.now || 0) - Date.now() / 1000
@@ -198,6 +217,7 @@ Panel {
     if (desktop) return "Desktop open"
     if (windows > 0) return windows + (windows === 1 ? " window open" : " windows open")
     if (idleDeadline > 0) return "Idle · stops in " + countdown()
+    if (mode === "warm") return "On · kept ready"
     if (idleMinutes === 0) return "On · stays on until stopped"
     return "On"
   }
@@ -266,6 +286,23 @@ Panel {
       setCursor("stopCancel")
     }
     else stopVm()
+  }
+
+  function setMode(value) {
+    if (value === mode) return
+    mode = value
+    if (value === "warm") expectStart()
+    run(["mode", value])
+  }
+
+  // What the chosen mode costs and buys, with this VM's own memory figure.
+  function modeText() {
+    var memory = ram !== "" ? ram.replace(/G$/, " GB") + " of memory" : "its memory"
+    if (mode === "warm")
+      return "Windows starts when you log in and stays on, so every app opens in about 3 seconds. It holds "
+        + memory + " all the time, in use or not."
+    return "Windows starts when you open an app (about 15 seconds) and stops when idle, using no memory in between. "
+      + "Warm keeps it on from login: apps open in about 3 seconds, but it holds " + memory + " all the time."
   }
 
   function setIdle(minutes) {
@@ -616,6 +653,45 @@ Panel {
 
           Column {
             visible: win.installed
+            width: parent.width
+            spacing: Style.space(10)
+
+            PanelSectionHeader {
+              text: "START-UP"
+              foreground: win.foreground
+              fontFamily: win.fontFamily
+            }
+
+            ButtonGroup {
+              options: win.modeOptions
+              value: win.mode
+              cursorIndex: win.cursorOn("mode") ? win.modeCursor : -1
+              foreground: win.foreground
+              fontFamily: win.fontFamily
+              fontSize: Style.font.caption
+              focusable: false
+              spacing: Style.spacing.xs
+              onChanged: function(value) { win.setMode(value) }
+              onHovered: function(index, isHovered) {
+                if (!isHovered) return
+                win.setCursor("mode")
+                win.modeCursor = index
+              }
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              text: win.modeText()
+              color: win.dim
+              font.family: win.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+          }
+
+          Column {
+            visible: win.installed && win.mode !== "warm"
             width: parent.width
             spacing: Style.space(10)
 

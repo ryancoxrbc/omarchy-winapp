@@ -79,14 +79,24 @@ EOF
 }
 ORIGINAL_PATH=$PATH
 
-# Something to connect to where the guest's RDP port would be.
+# Something to connect to where the guest's RDP port would be. Like Windows, it
+# confirms an RDP connection request, which is how winapp tells that Windows is
+# listening and not just Docker.
 exec {listener}< <(python3 -c '
-import socket, sys, time
+import socket
 s = socket.socket()
 s.bind(("127.0.0.1", 0))
 s.listen(64)
 print(s.getsockname()[1], flush=True)
-time.sleep(3600)')
+while True:
+    c, _ = s.accept()
+    try:
+        c.settimeout(0.5)
+        if c.recv(19)[5:6] == b"\xe0":
+            c.sendall(bytes.fromhex("030000130ed00000123400020f080002000000"))
+    except OSError:
+        pass
+    c.close()')
 read -r LISTEN_PORT <&"$listener"
 
 # Load winapp's functions into this shell for the groups that test them directly.
@@ -355,7 +365,7 @@ if group "frames and keys: fitting a tiling desktop"; then (
   rdp_spawn xfreerdp3 "$TMP/world/open.log" ""
   : >"$RUN_DIR/clients/$RDP_PID"
   sleep 0.3
-  frame_refresh
+  standing_refresh
   is "nothing is sent while an app is open: that would take its session" "$(runs)" "2"
   kill "$RDP_PID"
   wait "$RDP_PID" 2>/dev/null
@@ -381,12 +391,104 @@ if group "frames and keys: fitting a tiling desktop"; then (
   spawned '/q' >/dev/null
   is "…and the build is not tried again with every app" "$(runs)" "4"
   rm -f "$STUB_OUT/guest.json"
-  succeeds "it can be built again on request" frame_install
+  succeeds "setup builds it again" guest_prepare
   frame_usable && pass || fail "…and is used again"
 
   cfg_set superKey '"windows"'
   spawned '' >/dev/null
   is "superKey: windows hands the Super key to Windows" "$(cat "$STUB_OUT/client.super")" "windows"
+
+  is "at 100% the mouse pointer is left as Windows draws it" "$(cat "$STUB_OUT/client.pointer")" ""
+  STUB_SCALE=2
+  export STUB_SCALE
+  spawned '' >/dev/null
+  is "on a 200% monitor the client is told to halve it" "$(cat "$STUB_OUT/client.pointer")" "200"
+  cfg_set pointerScale 100
+  spawned '' >/dev/null
+  is "pointerScale: 100 leaves it alone" "$(cat "$STUB_OUT/client.pointer")" ""
+  unset STUB_SCALE
+  "$WINAPP" stop >/dev/null 2>&1
+  exit $failed
+); failed=$((failed + $?)); fi
+
+# -------------------------------------------------------------------------------
+if group "sessions: the next app, and a start that does not wait"; then (
+  failed=0
+  load
+  "$WINAPP" add word --exe 'C:\Office\WINWORD.EXE' --name "Microsoft Word" --icon "$ROOT/tests/fixtures/icon.png" >/dev/null 2>&1
+  : >"$STUB_OUT/window-open"
+  rdp_credentials
+  mkdir -p "$RUN_DIR/clients"
+
+  rdp_listening && pass || fail "a port that confirms an RDP connection request is Windows listening"
+  (RDP_PORT=1 && rdp_listening) && fail "a port that does not is not" || pass
+
+  # the next app goes to the session that is open
+  refuses "with no app open there is no session to ask" session_start 'C:\x.exe' ''
+  vm_up >/dev/null 2>&1
+  app_spawn "$TMP/world/spawn.log" Word 'C:\Office\WINWORD.EXE' '' >/dev/null 2>&1
+  has "an app's session redirects a folder for requests" "$(cat "$STUB_OUT/client.args")" "/drive:winappq,$REQUESTS"
+  # the frame program's part: it takes a request by renaming it
+  (
+    for _ in $(seq 100); do
+      for request in "$REQUESTS"/*.req; do
+        [[ -e $request ]] && mv "$request" "$STUB_OUT/request" && exit
+      done
+      sleep 0.05
+    done
+  ) &
+  succeeds "the next app is handed to the open session" session_start 'C:\Office\EXCEL.EXE' '"\\tsclient\home\a b.xlsx"'
+  wait $!
+  is "…as its command line" "$(cat "$STUB_OUT/request")" '"C:\Office\EXCEL.EXE" "\\tsclient\home\a b.xlsx"'
+  asked_lately && pass || fail "…and the connection is kept for the window that is coming"
+  refuses "a request nobody takes is withdrawn, and a connection made instead" session_start 'C:\x.exe' ''
+  is "…leaving nothing behind" "$(ls "$REQUESTS")" ""
+  printf 'x123456\t%s\n' "$TMP" >>"$DRIVES_FILE"
+  refuses "a file the session cannot reach needs a connection of its own" session_start 'C:\x.exe' ''
+  kill "$RDP_PID" 2>/dev/null
+  wait "$RDP_PID" 2>/dev/null
+  rm -f "$RUN_DIR/clients/$RDP_PID" "$DRIVES_FILE"
+
+  # a connection that takes the session over shows its windows anew
+  (
+    hyprctl() {
+      case "$1 $2" in
+      "clients -j") cat "$STUB_OUT/clients.json" ;;
+      "dispatch "*) echo "$2" >>"$STUB_OUT/moves" ;;
+      esac
+    }
+    clients_alive() { return 0; }
+    echo '[{"class":"winapp","title":"a.docx - Word","pid":1,"address":"0x1","workspace":{"name":"3"}}]' >"$STUB_OUT/clients.json"
+    places_note
+    echo '[{"class":"winapp","title":"a.docx - Word","pid":2,"address":"0x2","workspace":{"name":"1"}},
+           {"class":"winapp","title":"b.docx - Word","pid":2,"address":"0x3","workspace":{"name":"1"}}]' >"$STUB_OUT/clients.json"
+    places_restore 2
+    is "a window that was open goes back to its workspace, and the new one stays" "$(cat "$STUB_OUT/moves")" \
+      'hl.dsp.window.move({ workspace = "3", follow = false, window = "address:0x2" })'
+  )
+
+  # the console
+  is "the standing settings went along with the first app's job" "$(jq -c .tune "$STUB_OUT/guest.in.json")" '{"console":false,"trim":true}'
+  console_free && fail "a VM that has not said so is taken to sign in on its console" || pass
+  has "…and is started the way that waits for that" "$(cat "$STUB_OUT/pkexec.calls")" "__priv up_wait"
+  [[ -s $STUB_OUT/prime.runs ]] && pass || fail "…with a logon that claims the console's session"
+  printf '{"frame":{"status":"ok"},"tune":{"console":false,"search":4,"widgets":0}}\n' >"$STUB_OUT/guest.json"
+  cfg_set trimWindows false
+  standing_refresh
+  is "a changed setting is sent before the next app" "$(jq -c .tune "$STUB_OUT/guest.in.json")" '{"console":false,"trim":false}'
+  console_free && pass || fail "a console that Windows says is free is remembered"
+  "$WINAPP" stop >/dev/null 2>&1
+  rm -f "$STUB_OUT/pkexec.calls" "$STUB_OUT/prime.runs"
+  vm_up >/dev/null 2>&1
+  is "the next start does not wait for dockur" "$(cat "$STUB_OUT/pkexec.calls")" "pkexec $WINAPP_VM_HELPER __priv up"
+  [[ ! -e $STUB_OUT/prime.runs ]] && pass || fail "…and nothing has to claim the console first"
+  primed && pass || fail "…Windows listening is enough"
+  console_taken
+  console_free && fail "a refused logon means the console signs in after all" || pass
+  primed && fail "…this boot needs the claiming logon" || pass
+  tune_current && fail "…and the setting is applied again" || pass
+  cfg_set consoleSignIn true
+  is "consoleSignIn: true keeps the sign-in" "$(tune_job)" '{"tune":{"console":true,"trim":false}}'
   "$WINAPP" stop >/dev/null 2>&1
   exit $failed
 ); failed=$((failed + $?)); fi
@@ -446,6 +548,34 @@ if group "settings and failure messages"; then (
   "$WINAPP" idle 0
   is "idle 0 means never" "$("$WINAPP" state | jq -r .idleMinutes)" "0"
   refuses "idle wants a number" "$WINAPP" idle soon
+  "$WINAPP" idle 5
+
+  # cold or warm
+  is "the mode is cold unless chosen" "$("$WINAPP" state | jq -r .mode)" "cold"
+  [[ ! -e $STUB_OUT/pkexec.calls ]] && pass || fail "…and cold, asking for the state starts nothing"
+  refuses "mode wants cold or warm" "$WINAPP" mode lukewarm
+  "$WINAPP" mode warm
+  for _ in $(seq 100); do [[ $("$WINAPP" state | jq -r .vm) == running ]] && break; sleep 0.1; done
+  state=$("$WINAPP" state)
+  is "choosing warm starts Windows" "$(jq -r .vm <<<"$state")" "running"
+  is "…state says warm" "$(jq -r .mode <<<"$state")" "warm"
+  is "…and nothing stops it when idle" "$(jq -r '"\(.idleMinutes) \(.idleDeadline)"' <<<"$state")" "0 0"
+  has "mode says what warm costs" "$("$WINAPP" mode)" "holds its memory"
+  for _ in $(seq 50); do pgrep -f "$WINAPP start" >/dev/null || break; sleep 0.1; done
+  "$WINAPP" stop
+  rm -f "$STUB_OUT/pkexec.calls"
+  "$WINAPP" state >/dev/null
+  [[ ! -e $STUB_OUT/pkexec.calls ]] && pass || fail "stopped by hand, it stays stopped for this login"
+  rm -f "$RUN_DIR/warmed" # a new login
+  "$WINAPP" state >/dev/null
+  for _ in $(seq 100); do [[ -e $STUB_OUT/vm-running ]] && break; sleep 0.1; done
+  [[ -e $STUB_OUT/vm-running ]] && pass || fail "warm, the bar's first question after login starts Windows"
+  for _ in $(seq 100); do [[ $("$WINAPP" state | jq -r .vm) == running ]] && break; sleep 0.1; done
+  for _ in $(seq 50); do pgrep -f "$WINAPP start" >/dev/null || break; sleep 0.1; done
+  "$WINAPP" mode cold
+  [[ $("$WINAPP" state | jq -r .idleDeadline) -gt $(date +%s) ]] && pass || fail "back to cold, an unused Windows is on the idle timer again"
+  "$WINAPP" stop
+  "$WINAPP" idle 0
 
   rdp_credentials
   is "the password keeps its = and quotes" "$RDP_PASS" 'p=ss w"rd'
@@ -598,6 +728,8 @@ if group "shim: the helper-window fix"; then (
   out=$(LD_PRELOAD=$build/xshim.so "$build/test")
   is "unmanaged windows are not focused or resized; ordinary ones are untouched" "$?:$out" "0:"
   if "$build/test" >/dev/null; then fail "the harness notices when the shim is not loaded"; else pass; fi
+  out=$(WINAPP_SUPER=windows WINAPP_POINTER=200 LD_PRELOAD=$build/xshim.so "$build/test" settings)
+  is "Super goes to Windows when asked, and the pointer is reduced on a scaled monitor" "$?:$out" "0:"
   exit $failed
 ); failed=$((failed + $?)); fi
 

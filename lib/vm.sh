@@ -34,6 +34,19 @@ vm_installed() { [[ -e $COMPOSE || -f $LEGACY_COMPOSE ]]; }
 
 port_open() { timeout 1 bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null; }
 
+# Is Windows itself answering on the RDP port? Docker accepts connections there
+# from the moment the container starts, long before Windows listens, so an open
+# port says nothing. This sends the first packet of the protocol (an X.224
+# connection request) and looks for Windows' confirmation. Nothing is
+# negotiated and nobody is signed in.
+rdp_listening() {
+  local answer
+  answer=$(timeout 2 bash -c 'exec 3<>"/dev/tcp/$0/$1" || exit 1
+    printf "\x03\x00\x00\x13\x0e\xe0\x00\x00\x00\x00\x00\x01\x00\x08\x00\x03\x00\x00\x00" >&3
+    head -c 6 <&3 | od -An -tx1' "$RDP_HOST" "$RDP_PORT" 2>/dev/null)
+  [[ ${answer// /} == 030000130ed0 ]]
+}
+
 vm_running() {
   if docker_direct; then
     [[ $(docker inspect --format='{{.State.Status}}' "$CONTAINER" 2>/dev/null) == running ]]
@@ -141,22 +154,34 @@ explain_pkexec() {
 }
 
 vm_start() { # vm_start <log>
-  local log=$1 rc=0
+  local log=$1 rc=0 action=up_wait
   harden_dirs
   if docker_direct && [[ -r $COMPOSE ]] && anchors_ready; then
     compose -f "$COMPOSE" up -d >>"$log" 2>&1 || rc=$?
   else
     [[ -x $VM_HELPER ]] || die "Omarchy's Windows VM helper is missing ($VM_HELPER); run: omarchy update"
-    pkexec "$VM_HELPER" __priv up_wait >>"$log" 2>&1 || rc=$?
+    # up_wait returns when dockur says Windows has started, which is a fixed
+    # half minute; with a free console that wait is not needed (wait_guest)
+    if console_free; then action=up; fi
+    pkexec "$VM_HELPER" __priv "$action" >>"$log" 2>&1 || rc=$?
   fi
   ((rc == 0)) || die "could not start the Windows VM ($(explain_pkexec "$rc" "$log"))"
 }
 
-# After a boot Windows signs the user in on its own console, and a single-app
-# (RemoteApp) logon cannot take that session over: it fails with
-# LOGON_MSG_BUMP_OPTIONS until an ordinary RDP logon has claimed the session.
-# So one ordinary logon is made per boot, with FreeRDP's windowless sample
-# client. That logon doubles as the test for "the guest is ready".
+# As dockur installs it, Windows signs the user in on its own console at every
+# boot, and a single-app (RemoteApp) logon cannot take that session over: it
+# fails with LOGON_MSG_BUMP_OPTIONS until an ordinary RDP logon has claimed the
+# session. So one ordinary logon is made per boot, with FreeRDP's windowless
+# sample client. It has to wait: a logon that arrives while Windows is still
+# signing in on the console (measured: 0.3 s after it) leaves Remote Desktop
+# Services stuck for a minute, until Windows restarts them. Nothing outside
+# Windows shows when that sign-in is over, so the wait is for dockur's
+# "started successfully", which it prints half a minute after starting.
+#
+# None of that is needed when nobody signs in on the console, which is how
+# winapp sets Windows up (lib/guest.sh, "console"): the first logon can then be
+# the app's own, the moment Windows listens for one. Measured on one machine,
+# that is 7 s after the start instead of 36.
 primed() {
   local id
   id=$(vm_boot_id)
@@ -210,6 +235,17 @@ prime_once() { # prime_once <log>
 # as QEMU runs; the guest needs most of a minute more.
 wait_guest() { # wait_guest <log>
   local log=$1 deadline=$((SECONDS + 240)) started
+  if console_free; then
+    while ((SECONDS < deadline)); do
+      vm_running || return 1
+      if rdp_listening; then
+        vm_boot_id >"$RUN_DIR/primed"
+        return 0
+      fi
+      sleep 0.3
+    done
+    return 1
+  fi
   if docker_direct; then
     # docker logs persist across restarts, hence --since this start
     while ((SECONDS < deadline)); do
@@ -341,12 +377,13 @@ vm_state() { # stopped | starting | running | stopping
 
 # One JSON object for the bar widget. Cheap enough to be asked every few seconds.
 cmd_state() {
-  local vm deadline=0 n=0 installed=false access=prompt desktop=false apps='[]' ram="" cores=""
+  local vm deadline=0 n=0 installed=false access=prompt desktop=false apps='[]' ram="" cores="" mode=cold
   vm_installed && installed=true
   docker_direct && access=direct
   vm=$(vm_state)
   if [[ $vm == stopped ]]; then
     vm_note_stopped
+    warm_start
   else
     n=$(windows)
     desktop_open && desktop=true
@@ -357,12 +394,13 @@ cmd_state() {
   menu_stale && detached "$SELF" sync --quiet
   [[ -s $APPS_FILE ]] && apps=$(jq -c '[.apps[]? | select(.panel != false)
       | {id, name: (.name // .id), label: (.label // .name // .id), icon: (.icon // "")}]' "$APPS_FILE" 2>/dev/null)
-  jq -cn --arg vm "$vm" --arg access "$access" --arg version "$(version)" \
+  warm && mode=warm
+  jq -cn --arg vm "$vm" --arg access "$access" --arg version "$(version)" --arg mode "$mode" \
     --argjson installed "$installed" --argjson windows "${n:-0}" --argjson desktop "$desktop" \
     --arg ram "${ram:-}" --arg cores "${cores:-}" \
     --argjson idle "$(idle_minutes)" --argjson deadline "${deadline:-0}" \
     --argjson now "$(date +%s)" --argjson apps "${apps:-[]}" \
-    '{version: $version, installed: $installed, vm: $vm, access: $access, windows: $windows, desktop: $desktop,
+    '{version: $version, installed: $installed, vm: $vm, mode: $mode, access: $access, windows: $windows, desktop: $desktop,
       ram: $ram, cores: $cores,
       idleMinutes: $idle, idleDeadline: $deadline, now: $now, apps: $apps}'
 }
@@ -376,7 +414,7 @@ cmd_status() {
   elif desktop_open; then
     say "Windows VM running, desktop open"
   else
-    say "Windows VM running, $(windows) app window(s), idle shutdown after $(idle_minutes) min"
+    say "Windows VM running, $(windows) app window(s), $(if warm; then echo "kept on (warm)"; else echo "idle shutdown after $(idle_minutes) min"; fi)"
   fi
 }
 

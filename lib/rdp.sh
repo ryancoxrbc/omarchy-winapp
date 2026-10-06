@@ -76,7 +76,7 @@ ensure_shim() {
 # /args-from must be the client's only argument. FreeRDP block-buffers its log
 # when not on a terminal and callers wait for lines in it, hence stdbuf.
 rdp_spawn() {
-  local client=$1 log=$2 file=$3 preload=${LD_PRELOAD:-}
+  local client=$1 log=$2 file=$3 preload=${LD_PRELOAD:-} pointer
   shift 3
   ensure_shim && preload=$SHIM${preload:+:$preload}
   (
@@ -84,6 +84,7 @@ rdp_spawn() {
     # stdbuf adds its own library to this list rather than replacing it
     [[ -n $preload ]] && export LD_PRELOAD=$preload
     [[ $(cfg_json | jq -r '.superKey') == windows ]] && export WINAPP_SUPER=windows
+    pointer=$(pointer_percent) && export WINAPP_POINTER=$pointer
     exec stdbuf -oL -eL "$client" /args-from:stdin
   ) >>"$log" 2>&1 < <(
     [[ -n $file ]] && printf '%s\n' "$file"
@@ -94,18 +95,30 @@ rdp_spawn() {
 
 # xfreerdp3 is an X11 client and Hyprland leaves Xwayland unscaled, so Windows
 # is asked to render at the monitor's scale itself.
+monitor_percent() { # the focused monitor's scale, in percent
+  hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused)][0].scale // 1) * 100 | floor' 2>/dev/null
+}
+
 scale_args() {
   local percent
   percent=$(cfg .scale auto)
-  if [[ ! $percent =~ ^[0-9]+$ ]]; then
-    percent=$(hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused)][0].scale // 1) * 100 | floor' 2>/dev/null)
-  fi
+  [[ $percent =~ ^[0-9]+$ ]] || percent=$(monitor_percent)
   [[ $percent =~ ^[0-9]+$ ]] || return 0
   if ((percent >= 170)); then
     printf '%s\n' /scale:180 "/scale-desktop:$percent"
   elif ((percent >= 120)); then
     printf '%s\n' /scale:140 "/scale-desktop:$percent"
   fi
+}
+
+# What the shim reduces Windows' mouse pointer by (shim/xshim.c says why): the
+# monitor's scale, since that is what the desktop enlarges an X11 pointer by,
+# whatever "scale" has Windows draw at. Prints nothing, and fails, at 100%.
+pointer_percent() {
+  local percent
+  percent=$(cfg .pointerScale auto)
+  [[ $percent =~ ^[0-9]+$ ]] || percent=$(monitor_percent)
+  [[ $percent =~ ^[0-9]+$ ]] && ((percent > 100)) && echo "$percent"
 }
 
 # Arguments every visible session shares: the redirected folders, scaling,

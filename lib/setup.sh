@@ -51,6 +51,7 @@ link_cli() {
 # One-time changes inside Windows that make it work with Linux files: RemoteApp
 # may start any program, the ~/Windows share shows Linux-side changes at once,
 # and the shared folders are pinned to Quick access so file dialogs offer them.
+# The standing settings (lib/guest.sh) go along.
 # Remembered per VM (a reinstalled VM has a new MAC address), safe to repeat.
 vm_identity() { cat "$STORAGE_DIR/windows.mac" 2>/dev/null || echo unknown; }
 
@@ -60,11 +61,13 @@ guest_prepare() {
   local job
   job=$(shares | jq -Rn '{remoteapp: true, smbCache: true, pin: [inputs | split("\t")[0] | "\\\\tsclient\\" + .]}')
   frame_wanted && job=$(frame_job | jq -c --argjson job "$job" '$job + .')
+  job=$(tune_job | jq -c --argjson job "$job" '$job + .')
   guest_run apply "$job" 120 || return 1
   if [[ $(guest_out '.echo') != "$(cat "$GUEST_DIR/probe.txt")" ]]; then
     GUEST_ERROR="Windows could not read the redirected folder"
     return 1
   fi
+  tune_noted
   # cosmetic, so not a reason to call Windows unprepared; winapp doctor reports it
   frame_wanted && { frame_noted || true; }
   cfg_set guestPrepared "$(vm_identity | jq -R .)"

@@ -25,9 +25,19 @@ Windows is not ready. If it is still installing or updating, watch it at
 `~/.config/windows/credentials` is the one you chose when installing the VM.
 
 **A window with a Windows sign-in prompt appears instead of the app**
-Windows restarted while winapp thought it was still signed in. It normally
-notices and retries by itself; if you do see the prompt, close the window and
-open the app again.
+Someone is signed in on the VM's console, or Windows restarted while winapp
+thought it had that session. It normally notices and retries by itself; if you
+do see the prompt, close the window and open the app again.
+
+**The web console (port 8006) shows Windows' sign-in screen**
+That is intended: nobody is signed in on the console, so that the first app
+does not have to wait for that. Sign in there with the account in
+`~/.config/windows/credentials`, or use `winapp desktop`. `"consoleSignIn":
+true` in `config.json` brings the old behaviour back.
+
+**The first app after starting Windows still takes most of a minute**
+Windows still signs in on its console. `winapp doctor --deep` says so and
+applies the setting again; it takes effect the next time Windows starts.
 
 **The app's window is black or white, says "Not Responding", and ignores the
 mouse; tiny extra windows may appear next to it.**

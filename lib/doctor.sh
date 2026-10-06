@@ -111,7 +111,9 @@ cmd_doctor() {
     exes=$(apps_json | jq -c '[.apps[].exe]')
     job=$(jq -cn --argjson exes "$exes" '{exists: $exes}')
     frame_wanted && job=$(frame_job | jq -c --argjson job "$job" '$job + .')
+    job=$(tune_job | jq -c --argjson job "$job" '$job + .')
     if guest_run apply "$job" 120; then
+      tune_noted
       ok "signed in and started a program ($(guest_out '.windows.caption'))"
       if [[ $(guest_out '.echo') == "$(cat "$GUEST_DIR/probe.txt")" ]]; then
         ok "Windows reads and writes Linux folders"
@@ -135,6 +137,13 @@ cmd_doctor() {
         ok "app windows lose Windows' title bar and rounded corners"
       else
         note "$GUEST_ERROR" "apps still open, with Windows' own title bar and corners"
+      fi
+      if console_free; then
+        ok "nobody is signed in on the console: the first app does not wait for that"
+      elif [[ $(cfg .consoleSignIn false) == true ]]; then
+        say "  · Windows signs in on its console at boot (consoleSignIn in config.json): the first app waits half a minute for that"
+      else
+        note "Windows still signs in on its console at boot" "the first app waits half a minute for that; see the newest guest log in $LOG_DIR"
       fi
     else
       bad "$GUEST_ERROR"

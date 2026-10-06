@@ -22,8 +22,8 @@ plugin turns that VM into a source of apps:
   tick it in a checklist. It gets a launcher entry, its real icon and its file
   types. Around 40 common programs are recognised by name; everything else
   works too.
-- **The VM looks after itself.** It boots when you open an app (about 40
-  seconds cold, 3 seconds once it is up) and shuts down a few minutes after you
+- **The VM looks after itself.** It boots when you open an app (about 15
+  seconds cold, 3 seconds once it is up, under a second for the next app) and shuts down a few minutes after you
   close the last one, so it is not holding memory while you are not using it.
 - **A bar widget** shows whether Windows is running and what it is doing, opens
   apps, and starts or stops the VM.
@@ -134,7 +134,8 @@ Click the Windows icon in the bar, or bind a key to
 | Windows desktop | The full desktop, for installing programs and changing settings. |
 | Add or remove apps | The checklist of installed programs. |
 | Memory and processors | How much of this computer Windows gets. |
-| Stop when idle for | How long the VM stays up after the last app closes. |
+| Start-up | **Cold**: Windows starts when you open an app (about 15 seconds) and stops when idle, so it uses no memory in between. **Warm**: Windows starts when you log in and stays on, so every app opens in about 3 seconds; it holds its memory (16 GB, say) all the time, in use or not. |
+| Stop when idle for | Cold only: how long the VM stays up after the last app closes. |
 
 Keyboard: `↑` `↓` or `j` `k` to move, `Enter` to activate, `←` `→` on the idle
 row, `d` for the desktop, `a` to add apps, `m` for memory and processors, `r` to
@@ -182,6 +183,7 @@ winapp add <id> [options]    add a program        winapp remove <id>
 winapp apps                  list your apps       winapp icons   refetch icons
 
 winapp start | stop | status
+winapp mode [cold|warm]      start Windows for an app, or keep it on from login
 winapp idle <minutes>        0 = never stop by itself
 winapp resources [--ram <GB>] [--cores <n>]   the VM's memory and processors
 winapp shares | share add <name> <folder> | share remove <name>
@@ -197,14 +199,18 @@ winapp setup | doctor [--deep] | logs | uninstall
 
 | Key | Default | Meaning |
 |---|---|---|
+| `mode` | `"cold"` | `"cold"` starts Windows when an app is opened and stops it when idle. `"warm"` starts it when you log in (the bar widget does that) and keeps it on: apps open in a few seconds, and the VM's memory stays in use. |
 | `idleMinutes` | `5` | Stop the VM this long after the last app window closes. `0` never does. |
 | `shares` | home as `home` | Folders redirected into Windows. |
 | `scale` | `"auto"` | `"auto"` follows the focused monitor; or a percentage such as `150`. |
+| `pointerScale` | `"auto"` | What Windows' mouse pointer is reduced by on a scaled monitor: `"auto"` is the focused monitor's scale; or a percentage, `100` for none. |
 | `windowsSuffix` | `"auto"` | Add " (Windows)" to a launcher name: `"auto"` only when another app has the same name, `"always"`, or `"never"`. |
 | `helperWindowFix` | `true` | Keeps programs such as CorelDRAW from freezing; see [how it works](docs/how-it-works.md#the-helper-window-fix). |
 | `superKey` | `"linux"` | `"linux"` keeps the Super key for Omarchy's shortcuts, so Windows' Start menu does not open when you switch workspace. `"windows"` passes it to Windows. |
 | `titleBars` | `false` | `true` keeps the title bar Windows draws on app windows; see [window frames](docs/how-it-works.md#window-frames). |
 | `roundedCorners` | `false` | `true` keeps Windows 11's rounded window corners. |
+| `consoleSignIn` | `false` | `true` lets Windows sign in on the VM's own console at boot, as dockur sets it up. The first app then waits half a minute longer; see [what is changed in Windows](docs/how-it-works.md#what-is-changed-in-windows). |
+| `trimWindows` | `true` | Keeps Windows' search indexer and Widgets off. `false` puts them back. |
 | `rdpArgs` | `[]` | Extra FreeRDP arguments for every session, for example `["/microphone"]` or `["/kbd:layout:0x0407"]`. |
 
 `~/.config/winapp/apps.json` is the app list. It can be edited by hand; run

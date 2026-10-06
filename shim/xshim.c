@@ -1,8 +1,9 @@
 /*
  * winapp-xshim: corrections to how FreeRDP's X11 client (xfreerdp) behaves on
  * a tiling Wayland desktop. winapp loads it into the client with LD_PRELOAD;
- * nothing else is affected. There are two: what the client does to Windows'
- * helper windows, and what it does with the Super key.
+ * nothing else is affected. There are three: what the client does to Windows'
+ * helper windows, what it does with the Super key, and how large it shows
+ * the mouse pointer.
  *
  * --- Helper windows ---
  *
@@ -35,6 +36,13 @@
  * not focus, and geometry notifications are dropped, since Windows alone
  * decides where such a window is. Ordinary windows are left exactly as they are.
  *
+ * A helper window that Windows keeps at 0x0 has nothing to show at all, and
+ * yet the client maps it (as 1x1, the smallest X11 has). The compositor then
+ * lists it among the desktop's windows, on whatever workspace was in view,
+ * and workspace indicators draw an icon for it. So such a window is not
+ * mapped for as long as it is that small; it is the moment Windows gives it
+ * a size.
+ *
  * --- The Super key ---
  *
  * On Omarchy every Super shortcut belongs to the desktop: Super+2 changes
@@ -48,6 +56,17 @@
  * So Super is withheld from the client, together with any key pressed while
  * it is down, and is never reported as held. WINAPP_SUPER=windows in the
  * environment turns this off.
+ *
+ * --- The mouse pointer ---
+ *
+ * On a scaled monitor Windows is asked to draw at that scale itself (the
+ * compositor leaves X11 windows unscaled), so at 200% it sends a pointer of
+ * twice the size, and the client hands the picture to X as it comes. But a
+ * compositor shows an X11 client's pointer at the monitor's scale whatever
+ * it does with its windows, which is why an ordinary X11 program's 24 pixel
+ * pointer looks right. The Windows pointer is scaled twice and comes out
+ * double the size. WINAPP_POINTER in the environment is the monitor's scale
+ * in percent; pointer pictures are reduced by it before X gets them.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -208,11 +227,206 @@ int XNextEvent(Display* display, XEvent* event)
 	return rc;
 }
 
+/* Windows with no size (1x1 at most), and whether the client wants each shown. */
+static struct
+{
+	Window window;
+	int wanted;
+} empty[MAX_WINDOWS];
+static int empties;
+
+/* Where a window is among the empty ones, or -1. Called with the lock held. */
+static int find_empty(Window window)
+{
+	for (int i = 0; i < empties; i++)
+	{
+		if (empty[i].window == window)
+			return i;
+	}
+	return -1;
+}
+
+/* Note a window's size. Returns 1 when it has just become large enough to
+ * show and the client asked for that while it was empty. */
+static int sized(Window window, unsigned width, unsigned height)
+{
+	int show = 0;
+	pthread_mutex_lock(&lock);
+	const int at = find_empty(window);
+	if (width <= 1 && height <= 1)
+	{
+		if (at < 0 && empties < MAX_WINDOWS)
+		{
+			empty[empties].window = window;
+			empty[empties++].wanted = 0;
+		}
+	}
+	else if (at >= 0)
+	{
+		show = empty[at].wanted;
+		empty[at] = empty[--empties];
+	}
+	pthread_mutex_unlock(&lock);
+	return show;
+}
+
+/* Record whether the client wants an empty window shown. Returns 1 when the
+ * window is empty, 0 when it is not and the call is the client's own affair. */
+static int want_empty(Window window, int wanted)
+{
+	pthread_mutex_lock(&lock);
+	const int at = find_empty(window);
+	if (at >= 0)
+		empty[at].wanted = wanted;
+	pthread_mutex_unlock(&lock);
+	return at >= 0;
+}
+
+static int map(Display* display, Window window)
+{
+	static int (*real)(Display*, Window);
+	if (!real)
+		real = dlsym(RTLD_NEXT, "XMapWindow");
+	return real(display, window);
+}
+
+Window XCreateWindow(Display* display, Window parent, int x, int y, unsigned int width,
+                     unsigned int height, unsigned int border, int depth, unsigned int class,
+                     Visual* visual, unsigned long mask, XSetWindowAttributes* attributes)
+{
+	static Window (*real)(Display*, Window, int, int, unsigned int, unsigned int, unsigned int,
+	                      int, unsigned int, Visual*, unsigned long, XSetWindowAttributes*);
+	if (!real)
+		real = dlsym(RTLD_NEXT, "XCreateWindow");
+	const Window window =
+	    real(display, parent, x, y, width, height, border, depth, class, visual, mask, attributes);
+	(void)sized(window, width, height);
+	return window;
+}
+
+int XMapWindow(Display* display, Window window)
+{
+	if (is_unmanaged(window) && want_empty(window, 1))
+		return 1;
+	return map(display, window);
+}
+
+int XUnmapWindow(Display* display, Window window)
+{
+	static int (*real)(Display*, Window);
+	if (!real)
+		real = dlsym(RTLD_NEXT, "XUnmapWindow");
+	(void)want_empty(window, 0);
+	return real(display, window);
+}
+
+int XResizeWindow(Display* display, Window window, unsigned int width, unsigned int height)
+{
+	static int (*real)(Display*, Window, unsigned int, unsigned int);
+	if (!real)
+		real = dlsym(RTLD_NEXT, "XResizeWindow");
+	const int rc = real(display, window, width, height);
+	if (sized(window, width, height))
+		map(display, window);
+	return rc;
+}
+
+int XMoveResizeWindow(Display* display, Window window, int x, int y, unsigned int width,
+                      unsigned int height)
+{
+	static int (*real)(Display*, Window, int, int, unsigned int, unsigned int);
+	if (!real)
+		real = dlsym(RTLD_NEXT, "XMoveResizeWindow");
+	const int rc = real(display, window, x, y, width, height);
+	if (sized(window, width, height))
+		map(display, window);
+	return rc;
+}
+
 int XDestroyWindow(Display* display, Window window)
 {
 	static int (*real)(Display*, Window);
 	if (!real)
 		real = dlsym(RTLD_NEXT, "XDestroyWindow");
 	set_unmanaged(window, 0);
+	(void)sized(window, 2, 2); /* forgotten */
 	return real(display, window);
+}
+
+/* libXcursor's XcursorImage, which the client fills in itself. Pixels are
+ * 32 bits each, alpha included, row after row. */
+struct pointer_image
+{
+	unsigned version, size, width, height, xhot, yhot, delay;
+	unsigned* pixels;
+};
+
+static unsigned pointer_percent(void)
+{
+	static int percent = -1;
+	if (percent < 0)
+	{
+		const char* wanted = getenv("WINAPP_POINTER");
+		percent = wanted ? atoi(wanted) : 0;
+		if (percent <= 100 || percent > 800)
+			percent = 100;
+	}
+	return (unsigned)percent;
+}
+
+Cursor XcursorImageLoadCursor(Display* display, const struct pointer_image* image)
+{
+	static Cursor (*real)(Display*, const struct pointer_image*);
+	if (!real)
+		real = dlsym(RTLD_NEXT, "XcursorImageLoadCursor");
+	const unsigned percent = pointer_percent();
+	if (percent == 100 || !image || !image->pixels || image->width < 2 || image->height < 2)
+		return real(display, image);
+
+	struct pointer_image small = *image;
+	small.width = (image->width * 100 + percent / 2) / percent;
+	small.height = (image->height * 100 + percent / 2) / percent;
+	if (small.width < 1)
+		small.width = 1;
+	if (small.height < 1)
+		small.height = 1;
+	small.xhot = image->xhot * 100 / percent;
+	small.yhot = image->yhot * 100 / percent;
+	small.pixels = malloc(sizeof(unsigned) * small.width * small.height);
+	if (!small.pixels)
+		return real(display, image);
+
+	/* each new pixel is the average of the block of old ones it covers */
+	for (unsigned y = 0; y < small.height; y++)
+	{
+		const unsigned top = y * image->height / small.height;
+		unsigned bottom = (y + 1) * image->height / small.height;
+		if (bottom <= top)
+			bottom = top + 1;
+		for (unsigned x = 0; x < small.width; x++)
+		{
+			const unsigned left = x * image->width / small.width;
+			unsigned right = (x + 1) * image->width / small.width;
+			if (right <= left)
+				right = left + 1;
+			unsigned sum[4] = { 0, 0, 0, 0 };
+			for (unsigned row = top; row < bottom; row++)
+			{
+				for (unsigned column = left; column < right; column++)
+				{
+					const unsigned pixel = image->pixels[row * image->width + column];
+					for (int channel = 0; channel < 4; channel++)
+						sum[channel] += (pixel >> (8 * channel)) & 0xff;
+				}
+			}
+			const unsigned area = (bottom - top) * (right - left);
+			unsigned pixel = 0;
+			for (int channel = 0; channel < 4; channel++)
+				pixel |= ((sum[channel] + area / 2) / area) << (8 * channel);
+			small.pixels[y * small.width + x] = pixel;
+		}
+	}
+	const Cursor cursor = real(display, &small);
+	free(small.pixels);
+	return cursor;
 }

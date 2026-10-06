@@ -4,6 +4,8 @@
 #include <X11/Xlib.h>
 
 Atom fake_last_property, fake_last_value;
+int fake_mapped[64];                        /* by window id */
+unsigned fake_pointer[4], fake_pointer_pixel; /* width, height, xhot, yhot; its first pixel */
 static XEvent queue[8];
 static int queued, taken;
 
@@ -68,4 +70,55 @@ int XDestroyWindow(Display* display, Window window)
 {
 	(void)display; (void)window;
 	return 1;
+}
+
+Window XCreateWindow(Display* display, Window parent, int x, int y, unsigned int width,
+                     unsigned int height, unsigned int border, int depth, unsigned int class,
+                     Visual* visual, unsigned long mask, XSetWindowAttributes* attributes)
+{
+	static Window next = 40;
+	(void)display; (void)parent; (void)x; (void)y; (void)width; (void)height; (void)border;
+	(void)depth; (void)class; (void)visual; (void)mask; (void)attributes;
+	return next++;
+}
+
+int XMapWindow(Display* display, Window window)
+{
+	(void)display;
+	fake_mapped[window] = 1;
+	return 1;
+}
+
+int XUnmapWindow(Display* display, Window window)
+{
+	(void)display;
+	fake_mapped[window] = 0;
+	return 1;
+}
+
+int XResizeWindow(Display* display, Window window, unsigned int width, unsigned int height)
+{
+	(void)display; (void)window; (void)width; (void)height;
+	return 1;
+}
+
+int XMoveResizeWindow(Display* display, Window window, int x, int y, unsigned int width,
+                      unsigned int height)
+{
+	(void)display; (void)window; (void)x; (void)y; (void)width; (void)height;
+	return 1;
+}
+
+/* libXcursor's call, with its XcursorImage */
+struct image { unsigned version, size, width, height, xhot, yhot, delay; unsigned* pixels; };
+
+Cursor XcursorImageLoadCursor(Display* display, const struct image* image)
+{
+	(void)display;
+	fake_pointer[0] = image->width;
+	fake_pointer[1] = image->height;
+	fake_pointer[2] = image->xhot;
+	fake_pointer[3] = image->yhot;
+	fake_pointer_pixel = image->pixels[0];
+	return 7;
 }

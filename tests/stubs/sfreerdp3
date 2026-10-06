@@ -2,6 +2,7 @@
 # Stand-in for the FreeRDP client: records what it was asked to do, says it
 # signed in, and stays up until it is killed, like the real one.
 out=${STUB_OUT:?}
+echo run >>"$out/prime.runs"
 printf '%s\n' "$*" >"$out/client.argv"
 printf '%s\n' "${LD_PRELOAD:-}" >"$out/client.preload"
 mapfile -t args

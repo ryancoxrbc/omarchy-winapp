@@ -64,18 +64,3 @@ frame_noted() {
     return 1
   fi
 }
-
-# A job is a logon of its own, so the session has to be free (guest_run says so
-# when it is not; nothing is recorded then, and the next launch from cold
-# tries again).
-frame_install() { guest_run apply "$(frame_job)" 120 && frame_noted; }
-
-# Before an app is started: bring the VM's copy up to date when that can be
-# done now, and do without, quietly, when it cannot.
-frame_refresh() {
-  frame_wanted || return 0
-  frame_current && return 0
-  clients_alive && return 0
-  frame_install || true
-  idle_cancel # the job armed the idle timer, and an app is about to open
-}

@@ -41,6 +41,8 @@ Apps
 
 Windows
   winapp start | stop          boot the VM without an app / shut it down now
+  winapp mode [cold|warm]      cold: start Windows for an app, stop it when idle
+                               warm: start it at login and keep it, for instant apps
   winapp idle <minutes>        stop the VM this long after the last window (0 = never)
   winapp resources [--ram <GB>] [--cores <n>]
                                show, or change, the VM's memory and processors
@@ -106,6 +108,7 @@ state) cmd_state ;;
 status) cmd_status ;;
 start) cmd_start ;;
 stop) cmd_stop ;;
+mode) cmd_mode "${2:-}" ;;
 idle) cmd_idle "${2:-}" ;;
 resources) shift; cmd_resources "$@" ;;
 shares) cmd_shares ;;

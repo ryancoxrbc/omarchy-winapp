@@ -4,7 +4,29 @@
 #include <X11/Xlib.h>
 
 extern Atom fake_last_value;
+extern int fake_mapped[];
+extern unsigned fake_pointer[], fake_pointer_pixel;
 void fake_queue(const XEvent* event);
+
+struct image { unsigned version, size, width, height, xhot, yhot, delay; unsigned* pixels; };
+Cursor XcursorImageLoadCursor(Display* display, const struct image* image);
+
+static Window create(unsigned width, unsigned height)
+{
+	return XCreateWindow(NULL, 0, 0, 0, width, height, 0, 0, 0, NULL, 0, NULL);
+}
+
+/* A pointer picture of one colour; the first pixel X gets says what was done to it. */
+static void pointer(unsigned side, unsigned hot)
+{
+	static unsigned pixels[64 * 64];
+	struct image image = { 0 };
+	for (unsigned i = 0; i < side * side; i++) pixels[i] = (i % 2) ? 0xff204060 : 0xff406080;
+	image.width = image.height = side;
+	image.xhot = image.yhot = hot;
+	image.pixels = pixels;
+	XcursorImageLoadCursor(NULL, &image);
+}
 
 enum { WINDOW_TYPE = 100, DIALOG = 101, DROPDOWN_MENU = 102, NORMAL = 103 };
 static int failed;
@@ -77,8 +99,12 @@ int main(int argc, char** argv)
 	enum { SUPER = 133, TWO = 11, Y = 29 };
 	(void)argv;
 
-	if (argc > 1) /* with WINAPP_SUPER=windows: everything goes through */
+	if (argc > 1) /* with WINAPP_SUPER=windows and WINAPP_POINTER=200 */
 	{
+		pointer(64, 20);
+		check("on a 200% monitor the pointer is halved", fake_pointer[0] * 1000 + fake_pointer[1], 32032);
+		check("...and where it points with it", fake_pointer[2] * 1000 + fake_pointer[3], 10010);
+		check("...each pixel the average of those it replaces", fake_pointer_pixel, 0xff305070);
 		check("Super reaches Windows when asked for", key(KeyPress, SUPER, 0), KeyPress);
 		check("...and so does a key pressed with it", key(KeyPress, Y, Mod4Mask), KeyPress);
 		check("...and it is reported held", held() & Mod4Mask, Mod4Mask);
@@ -132,6 +158,28 @@ int main(int argc, char** argv)
 	override_redirect(menu, True);
 	XDestroyWindow(NULL, menu);
 	check("a destroyed window is forgotten", set_type(menu, DIALOG), DIALOG);
+
+	/* a helper window Windows keeps at 0x0 arrives as 1x1 */
+	const Window helper = create(1, 1), sizedmenu = create(200, 300), plain = create(1, 1);
+	override_redirect(helper, True);
+	override_redirect(sizedmenu, True);
+	XMapWindow(NULL, helper);
+	XMapWindow(NULL, sizedmenu);
+	XMapWindow(NULL, plain);
+	check("an unmanaged window with no size is not shown", fake_mapped[helper], 0);
+	check("...one with a size is", fake_mapped[sizedmenu], 1);
+	check("...and so is an ordinary window, whatever its size", fake_mapped[plain], 1);
+	XMoveResizeWindow(NULL, helper, 0, 0, 120, 40);
+	check("it is shown the moment Windows gives it a size", fake_mapped[helper], 1);
+	const Window never = create(0, 0);
+	override_redirect(never, True);
+	XMapWindow(NULL, never);
+	XUnmapWindow(NULL, never);
+	XResizeWindow(NULL, never, 50, 50);
+	check("...unless the client has hidden it since", fake_mapped[never], 0);
+
+	pointer(64, 20);
+	check("without a monitor scale the pointer is left alone", fake_pointer[0] * 1000 + fake_pointer[2], 64020);
 
 	return failed;
 }

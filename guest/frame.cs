@@ -10,6 +10,9 @@
 //   - every window gets square corners; Windows 11 rounds them, and what shows
 //     in the cut-off corners of a remote window is not the Linux desktop.
 //
+// While it is there it also starts the programs winapp asks for next (see
+// Serve), so that a second app needs no logon of its own.
+//
 // winapp builds this inside the VM (guest/apply.ps1) with the C# 5 compiler
 // that ships with Windows, hence the plain syntax, and starts apps through it.
 // It keeps no state and changes nothing that outlives a window.
@@ -119,8 +122,42 @@ static class WinappFrame {
     }
   }
 
+  // A session that is open can start the next program itself. That spares a
+  // logon, and it leaves the windows that are open where they are: a second
+  // connection would take them all over and show them again from scratch.
+  // winapp redirects a folder for this and puts a request in it, one file
+  // holding a command line. Taking a request is a rename, which only one side
+  // can win: winapp renames one that nobody took, and connects instead.
+  const string Requests = "\\\\tsclient\\winappq";
+
+  static void Serve() {
+    while (true) {
+      try {
+        foreach (string request in Directory.GetFiles(Requests, "*.req")) {
+          string taken = request + ".taken";
+          try { File.Move(request, taken); } catch (Exception) { continue; }
+          string line = File.ReadAllText(taken).Trim();
+          try { File.Delete(taken); } catch (Exception) { }
+          if (line.Length == 0) continue;
+          // on its own thread: a program that cannot be started says so in a
+          // box that waits for an answer, and the next request should not
+          Thread start = new Thread(delegate() { Launch(line); });
+          start.SetApartmentState(ApartmentState.STA);
+          start.IsBackground = true;
+          start.Start();
+        }
+      } catch (Exception) {
+        // no such folder in this session, or the connection is away
+      }
+      Thread.Sleep(150);
+    }
+  }
+
   static void Watch() {
     self = (uint)Process.GetCurrentProcess().Id;
+    Thread serve = new Thread(Serve);
+    serve.IsBackground = true; // ends with the watching
+    serve.Start();
     onShow = OnShow;
     SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, IntPtr.Zero, onShow, 0, 0, 0x2 /* skip own process */);
     SetTimer(IntPtr.Zero, UIntPtr.Zero, 500, IntPtr.Zero);

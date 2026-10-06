@@ -26,6 +26,7 @@ else
   printf '%s\n' "$*" >"$out/client.argv"
   printf '%s\n' "${LD_PRELOAD:-}" >"$out/client.preload"
   printf '%s\n' "${WINAPP_SUPER:-}" >"$out/client.super"
+  printf '%s\n' "${WINAPP_POINTER:-}" >"$out/client.pointer"
   printf '%s\n' "${args[@]}" >"$out/client.args"
   [[ ${args[0]:-} == *.rdp ]] && cp -- "${args[0]}" "$out/launch.rdp"
   echo $$ >"$out/client.pid"

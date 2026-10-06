@@ -156,7 +156,7 @@ cmd_share() {
   case $action in
   add)
     [[ $name =~ ^[A-Za-z][A-Za-z0-9_-]{0,14}$ ]] || die "usage: winapp share add <name> <folder>  (name: a letter, then up to 14 letters, digits, - or _)"
-    [[ ${name,,} != winapp ]] || die "the share name 'winapp' is used by winapp itself"
+    [[ ${name,,} != winapp && ${name,,} != winappq ]] || die "the share name '$name' is used by winapp itself"
     [[ -n $dir ]] || die "usage: winapp share add <name> <folder>"
     dir=$(realpath -s -- "$(expand_path "$dir")") && [[ -d $dir ]] || die "no such folder: ${3:-}"
     # stored relative to home, so the config still reads right for another user
