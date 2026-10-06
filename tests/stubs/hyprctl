@@ -4,7 +4,7 @@ out=${STUB_OUT:?}
 case "$1 $2" in
 "clients -j")
   if [[ -e $out/window-open && -s $out/client.pid ]]; then
-    printf '[{"class":"winapp","title":"Test - App","pid":%s}]\n' "$(cat "$out/client.pid")"
+    printf '[{"class":"winapp","title":"%s","pid":%s}]\n' "${STUB_TITLE:-Test - App}" "$(cat "$out/client.pid")"
   else
     echo '[]'
   fi

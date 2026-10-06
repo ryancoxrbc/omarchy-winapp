@@ -9,6 +9,7 @@
       "exe": ["winword.exe"],
       "ext": ["docx", "doc", "docm", "dotx", "dotm"],
       "opens": ["rtf", "odt"],
+      "startScreen": { "title": "Word", "args": "/w" },
       "registry": [
         { "key": "HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General", "name": "PreferCloudSaveLocations", "type": "REG_DWORD", "value": "0" },
         { "key": "HKCU\\Software\\Microsoft\\Office\\16.0\\Word\\Options", "name": "DOC-PATH", "type": "REG_EXPAND_SZ", "value": "{documents}" }
@@ -22,6 +23,7 @@
       "exe": ["excel.exe"],
       "ext": ["xlsx", "xls", "xlsm", "xlsb", "xltx", "xltm"],
       "opens": ["csv", "ods"],
+      "startScreen": { "title": "Excel", "args": "/x" },
       "registry": [
         { "key": "HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General", "name": "PreferCloudSaveLocations", "type": "REG_DWORD", "value": "0" },
         { "key": "HKCU\\Software\\Microsoft\\Office\\16.0\\Excel\\Options", "name": "DefaultPath", "type": "REG_EXPAND_SZ", "value": "{documents}" }

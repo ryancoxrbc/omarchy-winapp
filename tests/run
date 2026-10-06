@@ -464,6 +464,13 @@ if group "sessions: the next app, and a start that does not wait"; then (
   is "…as its command line" "$(cat "$STUB_OUT/request")" '"C:\Office\EXCEL.EXE" "\\tsclient\home\a b.xlsx"'
   asked_lately && pass || fail "…and the connection is kept for the window that is coming"
   refuses "a request nobody takes is withdrawn, and a connection made instead" session_start 'C:\x.exe' ''
+  # an app whose start screen would become the file
+  is "a file opens as usual beside a document" "$(start_screen_args word 'C:\Office\WINWORD.EXE')" ""
+  is "…and gets a window of its own beside the app's start screen" "$(STUB_TITLE=Word start_screen_args word 'C:/Office/WINWORD.EXE')" "/w"
+  is "…which is that app's alone" "$(STUB_TITLE=Word start_screen_args excel 'C:\Office\EXCEL.EXE')" ""
+  is "…each with its own switch" "$(STUB_TITLE=Excel start_screen_args excel 'C:\Office\EXCEL.EXE')" "/x"
+  is "…and none for an app that has no such switch" "$(STUB_TITLE=PowerPoint start_screen_args powerpoint 'C:\Office\POWERPNT.EXE')" ""
+  is "…and not a program that only shares its name" "$(STUB_TITLE=Word start_screen_args word 'C:\Other\word.exe')" ""
   is "…leaving nothing behind" "$(ls "$REQUESTS")" ""
   printf 'x123456\t%s\n' "$TMP" >>"$DRIVES_FILE"
   refuses "a file the session cannot reach needs a connection of its own" session_start 'C:\x.exe' ''

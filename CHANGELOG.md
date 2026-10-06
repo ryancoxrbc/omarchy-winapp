@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.4.1 - 2026-10-06
+
+### Fixed
+
+- A file opened from Linux while Word or Excel shows its start screen (the
+  app opened on its own, nothing chosen yet) gets a window of its own. The
+  app used to turn the start screen into the file, so nothing appeared where
+  you opened it and the window you had left open elsewhere changed instead.
+  PowerPoint still does this: it runs as a single copy whose start screen is
+  its only window until a presentation is open, and has no switch around it.
+
 ## 2.4.0 - 2026-10-06
 
 ### Changed

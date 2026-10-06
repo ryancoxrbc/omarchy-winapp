@@ -17,6 +17,22 @@ win_args() {
   printf '%s' "$out"
 }
 
+# An app opened without a file shows a start screen, and some apps turn that
+# window into the next file opened instead of giving the file a window of its
+# own. For those the catalog names the start screen's title and the arguments
+# that keep it out of this; they start one more copy of the app, so they are
+# used only while such a window is there.
+start_screen_args() { # start_screen_args <id> <exe>
+  local title args
+  IFS=$'\t' read -r title args < <(jq -r --arg id "$1" --arg exe "${2//\//\\}" '
+    .apps[] | select(.id == $id and (.exe | index($exe | split("\\") | last | ascii_downcase)) != null)
+    | .startScreen // empty | "\(.title)\t\(.args)"' "$CATALOG" 2>/dev/null)
+  [[ -n $title && -n $args ]] || return 0
+  hyprctl clients -j 2>/dev/null |
+    jq -e --arg title "$title" "any(.[] | $APP_WINDOWS; .title == \$title)" >/dev/null 2>&1 || return 0
+  printf '%s' "$args"
+}
+
 # --- an app session that is already open ---------------------------------------
 # The frame program in it starts the next app when asked (guest/frame.cs): no
 # second logon, and the windows that are open stay as and where they are. The
@@ -219,13 +235,14 @@ launch_cleanup() {
 # --- commands ----------------------------------------------------------------
 
 cmd_app() { # winapp <app> [file...]
-  local id=$1 exe title fixed files
+  local id=$1 exe title fixed files own
   shift
   exe=$(app_field "$id" exe)
   [[ -n $exe ]] || die "no app called '$id' (see: winapp apps, winapp help)"
   title=$(app_field "$id" name)
   fixed=$(app_field "$id" args)
   files=$(win_args "$@") || exit 1
+  [[ -n $files ]] && own=$(start_screen_args "$id" "$exe") && files="${own:+$own }$files"
   launch "$id" "${title:-$id}" "$exe" "$fixed${fixed:+${files:+ }}$files"
 }
 

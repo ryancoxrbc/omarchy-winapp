@@ -100,6 +100,14 @@ Things that were learned the hard way and are handled:
   connection takes over are then put back on the workspaces they were on; they
   would otherwise all land on the one in view. Two launches made at the same
   instant are serialised.
+- **A start screen is not a document.** Word and Excel opened without a file
+  show a start screen, and turn that window into the next file they are given.
+  So while a window with exactly that title is open (`startScreen` in
+  `catalog.json`), a file is opened with the switch that starts another copy
+  of the app (`/w` for Word, `/x` for Excel), which gives it a window of its
+  own. Only then: each copy is some 230 MB. PowerPoint does the same and
+  cannot be talked out of it. It runs as one copy, and neither a switch nor
+  its automation interface opens a presentation beside the start screen.
 - **Desktop or apps.** A desktop edition of Windows keeps one session
   connected at a time. The full desktop is the console session and apps run in
   another, so while one is connected a logon to the other is refused (or, for
