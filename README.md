@@ -13,7 +13,8 @@ Omarchy can already run Windows in a virtual machine (Install > Windows). This
 plugin turns that VM into a source of apps:
 
 - **Apps as windows.** Each Windows program opens in its own window that tiles,
-  floats and switches like any other. No Windows desktop around it.
+  floats and switches like any other. No Windows desktop around it, no Windows
+  title bar on top of it, square corners, and the Super key stays Omarchy's.
 - **Your files, in place.** Double-click a `.docx`, `.cdr` or `.sldprt` in the
   file manager and it opens in the Windows app. Save, and the Linux file is
   updated. Nothing is copied into the VM and there is no sync folder.
@@ -164,16 +165,7 @@ Omarchy starts and stops the Windows VM through Docker. If you have turned on
 
 If you have not (the Omarchy default), Omarchy asks for your password each time
 the VM starts and each time it stops, including when it stops by itself after
-sitting idle. The setup offers to waive that:
-
-```bash
-winapp passwordless on    # or: off, status
-```
-
-This installs one polkit rule that lets your user run exactly two actions of
-Omarchy's VM helper, start and stop, without a prompt. Creating, changing or
-removing the VM still asks. It is a much smaller grant than sudoless Docker,
-which makes your user equivalent to root.
+sitting idle. That is Omarchy's own prompt, and the plugin leaves it alone.
 
 ## Commands
 
@@ -194,7 +186,7 @@ winapp idle <minutes>        0 = never stop by itself
 winapp resources [--ram <GB>] [--cores <n>]   the VM's memory and processors
 winapp shares | share add <name> <folder> | share remove <name>
 
-winapp setup | doctor [--deep] | logs | passwordless on|off | uninstall
+winapp setup | doctor [--deep] | logs | uninstall
 ```
 
 `winapp help` has the full list.
@@ -210,6 +202,9 @@ winapp setup | doctor [--deep] | logs | passwordless on|off | uninstall
 | `scale` | `"auto"` | `"auto"` follows the focused monitor; or a percentage such as `150`. |
 | `windowsSuffix` | `"auto"` | Add " (Windows)" to a launcher name: `"auto"` only when another app has the same name, `"always"`, or `"never"`. |
 | `helperWindowFix` | `true` | Keeps programs such as CorelDRAW from freezing; see [how it works](docs/how-it-works.md#the-helper-window-fix). |
+| `superKey` | `"linux"` | `"linux"` keeps the Super key for Omarchy's shortcuts, so Windows' Start menu does not open when you switch workspace. `"windows"` passes it to Windows. |
+| `titleBars` | `false` | `true` keeps the title bar Windows draws on app windows; see [window frames](docs/how-it-works.md#window-frames). |
+| `roundedCorners` | `false` | `true` keeps Windows 11's rounded window corners. |
 | `rdpArgs` | `[]` | Extra FreeRDP arguments for every session, for example `["/microphone"]` or `["/kbd:layout:0x0407"]`. |
 
 `~/.config/winapp/apps.json` is the app list. It can be edited by hand; run
@@ -217,8 +212,9 @@ winapp setup | doctor [--deep] | logs | passwordless on|off | uninstall
 `name` and `exe`, and optionally `args`, `icon`, `ext` (file types that are its
 own), `opens` (types it can also open), `default` (`true`: always the default
 app for its own types; `false`: never; unset: only for types nothing on Linux
-opens), and `panel` / `menu` set to `false` to hide it there (hidden from the
-launcher, it still opens its file types).
+opens), `panel` / `menu` set to `false` to hide it there (hidden from the launcher, it
+still opens its file types), and `titleBar` set to `true` to keep Windows'
+title bar on that app.
 
 ## When something is wrong
 
@@ -268,8 +264,7 @@ The Windows VM itself is Omarchy's and is left alone.
 Developed and tested on Omarchy 4.0 with FreeRDP 3.31 and Windows 11. Both
 ways of reaching the VM have been run end to end on the same machine: with
 sudoless Docker, and with Docker access switched off so that starting and
-stopping go through Omarchy's password prompt, with and without `winapp
-passwordless on`. It has not yet been run on a second machine. If something
+stopping go through Omarchy's password prompt. It has not yet been run on a second machine. If something
 misbehaves, `winapp doctor` and an issue with `winapp logs` attached are very
 welcome.
 

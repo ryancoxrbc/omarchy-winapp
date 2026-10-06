@@ -4,17 +4,16 @@
 
 DOCTOR_FAILED=0
 
-mark() { # mark <colour code> <symbol>: coloured only when someone is looking
-  if [[ -t 1 ]]; then printf '\033[%sm%s\033[0m' "$1" "$2"; else printf '%s' "$2"; fi
+# mark <colour code> <symbol> <finding> [what to do]; coloured only when
+# someone is looking
+mark() {
+  if [[ -t 1 ]]; then printf '  \033[%sm%s\033[0m %s\n' "$1" "$2" "$3"; else printf '  %s %s\n' "$2" "$3"; fi
+  [[ -z ${4:-} ]] || printf '      %s\n' "$4"
 }
-ok() { printf '  %s %s\n' "$(mark 32 ✓)" "$1"; }
-note() {
-  printf '  %s %s\n' "$(mark 33 !)" "$1"
-  [[ -z ${2:-} ]] || printf '      %s\n' "$2"
-}
+ok() { mark 32 ✓ "$1"; }
+note() { mark 33 ! "$@"; }
 bad() {
-  printf '  %s %s\n' "$(mark 31 ✗)" "$1"
-  [[ -z ${2:-} ]] || printf '      %s\n' "$2"
+  mark 31 ✗ "$@"
   DOCTOR_FAILED=1
 }
 
@@ -45,7 +44,7 @@ cmd_doctor() {
     note "the helper-window fix could not be built" "it needs a C compiler: omarchy pkg add gcc. Without it, apps such as CorelDRAW can freeze"
   fi
   if [[ -e /dev/kvm ]]; then ok "KVM is available"; else bad "/dev/kvm is missing" "enable virtualization in the firmware setup"; fi
-  if [[ -L $BIN_LINK && $(realpath -- "$BIN_LINK" 2>/dev/null) == "$SELF" ]]; then
+  if cli_linked; then
     ok "winapp is on PATH ($BIN_LINK)"
   else
     note "the winapp command is not linked into ${BIN_LINK%/*}" "run: winapp setup"
@@ -72,9 +71,9 @@ cmd_doctor() {
   if docker_direct; then
     ok "Docker is reachable directly (sudoless Docker)"
   elif [[ $(cfg .passwordless false) == true ]]; then
-    ok "starting and stopping without a password (winapp passwordless on)"
+    ok "starting and stopping without a password (a rule from winapp 2.1; undo with: sudo rm $POLKIT_RULE)"
   else
-    note "Omarchy asks for a password to start and to stop Windows" "skip the prompts with: winapp passwordless on"
+    say "  · Omarchy asks for your password to start and to stop Windows"
   fi
   if [[ -r $CREDENTIALS ]]; then
     ok "sign-in details ($CREDENTIALS)"
@@ -86,9 +85,8 @@ cmd_doctor() {
   say ""
   say "Folders Windows can reach"
   while IFS=$'\t' read -r name dir; do
-    dir=$(expand_path "$dir")
     if [[ -d $dir ]]; then ok "\\\\tsclient\\$name  =  $dir"; else bad "share '$name' points at $dir, which does not exist" "winapp share remove $name"; fi
-  done < <(cfg_json | jq -r '.shares[]? | "\(.name)\t\(.path)"')
+  done < <(shares all)
   [[ -n $(shares) ]] || note "nothing is shared" "each opened file's folder is redirected on its own; share more with: winapp share add"
 
   say ""
@@ -112,6 +110,7 @@ cmd_doctor() {
   else
     exes=$(apps_json | jq -c '[.apps[].exe]')
     job=$(jq -cn --argjson exes "$exes" '{exists: $exes}')
+    frame_wanted && job=$(frame_job | jq -c --argjson job "$job" '$job + .')
     if guest_run apply "$job" 120; then
       ok "signed in and started a program ($(guest_out '.windows.caption'))"
       if [[ $(guest_out '.echo') == "$(cat "$GUEST_DIR/probe.txt")" ]]; then
@@ -129,6 +128,13 @@ cmd_doctor() {
         while IFS= read -r name; do bad "not found in Windows: $name" "find where it is now with: winapp scan"; done <<<"$missing"
       else
         ok "every added app is installed"
+      fi
+      if ! frame_wanted; then
+        say "  · window frames are left to Windows (titleBars and roundedCorners in config.json)"
+      elif frame_noted; then
+        ok "app windows lose Windows' title bar and rounded corners"
+      else
+        note "$GUEST_ERROR" "apps still open, with Windows' own title bar and corners"
       fi
     else
       bad "$GUEST_ERROR"
@@ -148,12 +154,9 @@ cmd_logs() {
   # shellcheck disable=SC2012 # names are ours
   newest=$(ls -1t "$LOG_DIR"/*.log 2>/dev/null | head -n1)
   [[ -n $newest ]] || die "no logs yet in $LOG_DIR"
-  if [[ ${1:-} == --path ]]; then
-    say "$newest"
-  else
-    say "$newest"
-    say ""
-    # the FreeRDP client repeats a few "TODO: implement" warnings endlessly
-    grep -v 'TODO: implement\|xf_Pointer\|FAT_IOCTL_GET_ATTRIBUTES' "$newest" | tail -n 60
-  fi
+  say "$newest"
+  [[ ${1:-} == --path ]] && return
+  say ""
+  # the FreeRDP client repeats a few "TODO: implement" warnings endlessly
+  grep -v 'TODO: implement\|xf_Pointer\|FAT_IOCTL_GET_ATTRIBUTES' "$newest" | tail -n 60
 }

@@ -76,15 +76,4 @@ foreach ($lnk in (Get-ChildItem $dirs -Recurse -Filter *.lnk -ErrorAction Silent
   } catch { }
 }
 
-$os = Get-CimInstance Win32_OperatingSystem
-$policy = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -ErrorAction SilentlyContinue
-$allow = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Terminal Server\TSAppAllowList' -ErrorAction SilentlyContinue
-
-Write-Result ([pscustomobject]@{
-    windows   = [pscustomobject]@{ caption = [string]$os.Caption; version = [string]$os.Version }
-    remoteapp = [pscustomobject]@{
-      allowUnlisted     = [int]$policy.fAllowUnlistedRemotePrograms
-      allowListDisabled = [int]$allow.fDisabledAllowList
-    }
-    apps      = $apps.ToArray()
-  })
+Write-Result ([pscustomobject]@{ apps = $apps.ToArray() })

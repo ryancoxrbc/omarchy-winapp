@@ -5,6 +5,7 @@
 
 GUEST_DIR=$RUN_DIR/guest
 GUEST_ERROR=""
+SESSION_IN_USE="close the open Windows apps and desktop first (this needs the VM's only session)"
 
 # guest_run <job> [input json] [timeout seconds]
 # Runs guest/<job>.ps1 and leaves its results in $GUEST_DIR (out.json, icons/).
@@ -17,7 +18,7 @@ guest_run() {
   local -a drives
   GUEST_ERROR=""
   if clients_alive || desktop_elsewhere; then
-    GUEST_ERROR="close the open Windows apps and desktop first (this needs the VM's only session)"
+    GUEST_ERROR=$SESSION_IN_USE
     return 1
   fi
   vm_up "Windows is needed for a moment."
@@ -25,6 +26,7 @@ guest_run() {
   mkdir -p "$GUEST_DIR"
   cp "$ROOT/guest/run.ps1" "$GUEST_DIR/run.ps1"
   cp "$ROOT/guest/$job.ps1" "$GUEST_DIR/job.ps1"
+  cp "$ROOT/guest/frame.cs" "$GUEST_DIR/frame.cs" # what the apply job builds, when asked to
   [[ -n $input ]] && printf '%s' "$input" >"$GUEST_DIR/in.json"
   printf '%s\n' "$RANDOM$RANDOM" >"$GUEST_DIR/probe.txt"
   log=$(new_log guest)
@@ -53,7 +55,6 @@ guest_run() {
     GUEST_ERROR="the job failed inside the VM: $(tr -d '\r' <"$GUEST_DIR/error.txt" | sed '/^[[:space:]]*$/d' | head -n 3 | tr '\n' ' ')"
     return 1
   fi
-  return 0
 }
 
 guest_out() { # guest_out [jq options] <filter>: read the last job's result

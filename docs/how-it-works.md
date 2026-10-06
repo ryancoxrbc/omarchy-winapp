@@ -117,6 +117,45 @@ The behaviour is reported to FreeRDP as
 [FreeRDP/FreeRDP#13610](https://github.com/FreeRDP/FreeRDP/issues/13610); once
 a release with a fix is in use, the shim has nothing left to do and can go.
 
+## The Super key
+
+On Omarchy every Super shortcut belongs to the desktop. Hyprland still hands
+the Super press itself to the focused window, the client forwards it, and when
+the shortcut moves the focus away the client releases it. Windows sees its
+Windows key tapped and opens the Start menu, which is waiting there on the way
+back. The same shim therefore keeps Super, and any key pressed while it is
+down, from the client, and never reports Super as held.
+`"superKey": "windows"` in `config.json` hands the key back to Windows, for
+those who want Win+V or Win+. in the combinations Omarchy leaves free.
+
+## Window frames
+
+Windows draws a title bar on a program's main window and, since Windows 11,
+rounds every window's corners. On a tiling desktop the title bar repeats what
+the desktop already does, and what shows in the cut-off corners is Windows'
+background, not yours. The picture of each window arrives finished, so neither
+can be changed on the Linux side. A small program inside Windows does it:
+`winapp-frame.exe`, built in the VM from `guest/frame.cs` by the C# compiler
+Windows carries, and kept in `C:\ProgramData\winapp`. Apps are started through
+it. It starts the app and, for as long as the session is connected,
+
+- takes the title bar and sizing border off main windows whose title bar
+  Windows draws. A menu bar is a separate part of the window and stays. Dialogs
+  keep their title, and so do floating palettes, which are moved by it;
+- asks Windows not to round the corners of any window.
+
+A program that draws its own title bar, as Office does, has nothing here to
+remove: its name and buttons are part of the program. It still gets square
+corners.
+
+The program does nothing unless winapp starts an app through it, keeps no
+state, and leaves when the session disconnects. `"titleBars": true` and
+`"roundedCorners": true` in `config.json` leave either to Windows, and
+`"titleBar": true` on an app in `apps.json` keeps that one app's title bar. A
+change reaches Windows with the next app opened while no other is open. If the
+program cannot be built or started, apps open as they did before it existed,
+and `winapp doctor --deep` says why.
+
 ## Files are redirected, not shared
 
 FreeRDP's drive redirection makes a Linux folder appear in the session as
@@ -180,3 +219,4 @@ in `mimeapps.list`, and nothing else.
 | `~/.cache/winapp/` | the last scan |
 | `~/.local/state/winapp/log/` | the last 20 session logs |
 | `$XDG_RUNTIME_DIR/winapp/` | pid files, the idle countdown, locks |
+| `C:\ProgramData\winapp\` (in the VM) | the window-frame program and its settings |

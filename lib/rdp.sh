@@ -18,10 +18,8 @@ rdp_credentials() {
       esac
     done <"$CREDENTIALS"
   fi
-  if [[ -z $RDP_USER || -z $RDP_PASS ]] && [[ -r $COMPOSE ]]; then
-    [[ -n $RDP_USER ]] || RDP_USER=$(compose_value USERNAME)
-    [[ -n $RDP_PASS ]] || RDP_PASS=$(compose_value PASSWORD)
-  fi
+  [[ -n $RDP_USER ]] || RDP_USER=$(compose_value USERNAME)
+  [[ -n $RDP_PASS ]] || RDP_PASS=$(compose_value PASSWORD)
   : "${RDP_USER:=docker}" "${RDP_PASS:=admin}"
 
   # FreeRDP tries Kerberos before NTLM, and the krb5.conf Arch ships names MIT's
@@ -33,7 +31,8 @@ rdp_credentials() {
 }
 
 # A value from Omarchy's compose file, undoing the escaping its writer applied
-# (compose interpolation first, then the YAML double-quoted scalar).
+# (compose interpolation first, then the YAML double-quoted scalar). Nothing
+# when the file cannot be read.
 compose_value() {
   local v
   v=$(sed -n "s/.*$1: \"\(.*\)\"/\1/p" "$COMPOSE" 2>/dev/null | head -n1)
@@ -84,6 +83,7 @@ rdp_spawn() {
     release_locks
     # stdbuf adds its own library to this list rather than replacing it
     [[ -n $preload ]] && export LD_PRELOAD=$preload
+    [[ $(cfg_json | jq -r '.superKey') == windows ]] && export WINAPP_SUPER=windows
     exec stdbuf -oL -eL "$client" /args-from:stdin
   ) >>"$log" 2>&1 < <(
     [[ -n $file ]] && printf '%s\n' "$file"

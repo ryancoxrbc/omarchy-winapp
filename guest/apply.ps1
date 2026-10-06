@@ -5,6 +5,8 @@
 #   remoteapp true                         let RemoteApp start any program
 #   smbCache  true                         stop Windows caching the ~/Windows share's listings
 #   pin       ["\\tsclient\home", ...]     pin folders to Quick access
+#   frame     {stamp, titleBars, roundedCorners, keep[]}
+#                                          build the program apps are started through, and its settings
 # The result always reports the Windows version and the RemoteApp policy.
 
 $job = Read-Job
@@ -173,6 +175,38 @@ if ($job.pin) {
   # the shell pins in the background; leaving at once would lose it
   if ($pinned -gt 0) { Start-Sleep -Milliseconds 1500 }
   $result.pinned = $pinned
+}
+
+if ($job.frame) {
+  # winapp-frame.exe (frame.cs, sent along with this job) takes the Windows
+  # title bar and rounded corners off app windows. It is compiled here, once
+  # per version, by the compiler Windows carries; it does nothing unless winapp
+  # starts an app through it.
+  $frame = [ordered]@{}
+  try {
+    $dir = Join-Path $env:ProgramData 'winapp'
+    $exe = Join-Path $dir 'winapp-frame.exe'
+    $stamp = Join-Path $dir 'frame.stamp'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $built = (Test-Path -LiteralPath $exe) -and (Test-Path -LiteralPath $stamp) -and
+      ([IO.File]::ReadAllText($stamp).Trim() -eq [string]$job.frame.stamp)
+    if (-not $built) {
+      Get-Process -Name 'winapp-frame' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+      Start-Sleep -Milliseconds 300
+      Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue
+      $source = [IO.File]::ReadAllText((Join-Path $share 'frame.cs'), $utf8)
+      Add-Type -TypeDefinition $source -OutputAssembly $exe -OutputType WindowsApplication
+      [IO.File]::WriteAllText($stamp, [string]$job.frame.stamp, $utf8)
+    }
+    $lines = @(
+      "titleBars=$([int][bool]$job.frame.titleBars)"
+      "roundedCorners=$([int][bool]$job.frame.roundedCorners)"
+      "keep=$(@($job.frame.keep | Where-Object { $_ }) -join ';')"
+    )
+    [IO.File]::WriteAllLines((Join-Path $dir 'frame.conf'), [string[]]$lines, $utf8)
+    $frame.status = 'ok'
+  } catch { $frame.status = "failed: $($_.Exception.Message)" }
+  $result.frame = $frame
 }
 
 # --- always --------------------------------------------------------------------

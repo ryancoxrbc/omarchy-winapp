@@ -54,7 +54,6 @@ Folders
 Setup
   winapp setup                 install or repair everything
   winapp doctor [--deep]       check that it all works
-  winapp passwordless on|off   start and stop the VM without a password prompt
   winapp logs                  show the latest log
   winapp uninstall [--purge]
 
@@ -76,6 +75,8 @@ source "$ROOT/lib/paths.sh"
 source "$ROOT/lib/launch.sh"
 # shellcheck source=lib/guest.sh
 source "$ROOT/lib/guest.sh"
+# shellcheck source=lib/frame.sh
+source "$ROOT/lib/frame.sh"
 # shellcheck source=lib/apps.sh
 source "$ROOT/lib/apps.sh"
 # shellcheck source=lib/resources.sh
@@ -115,7 +116,6 @@ explorer) shift; cmd_explorer "$@" ;;
 desktop) cmd_desktop ;;
 setup) shift; cmd_setup "$@" ;;
 doctor) shift; cmd_doctor "$@" ;;
-passwordless) cmd_passwordless "${2:-status}" ;;
 logs) cmd_logs "${2:-}" ;;
 uninstall) shift; cmd_uninstall "$@" ;;
 __idle) cmd___idle "${2:-}" "${3:-0}" ;;

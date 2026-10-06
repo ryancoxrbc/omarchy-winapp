@@ -176,13 +176,11 @@ primed() {
 # theirs over stdin.)
 desktop_elsewhere() { pgrep -f "xfreerdp3 .*/v:$RDP_HOST:$RDP_PORT" >/dev/null 2>&1; }
 
-desktop_ours() {
+desktop_open() { # ours (`winapp desktop`), or that launcher's
   local pid
   pid=$(cat "$RUN_DIR/desktop.pid" 2>/dev/null)
-  [[ $pid =~ ^[0-9]+$ && $(cat "/proc/$pid/comm" 2>/dev/null) == xfreerdp3 ]]
+  [[ $pid =~ ^[0-9]+$ && $(cat "/proc/$pid/comm" 2>/dev/null) == xfreerdp3 ]] || desktop_elsewhere
 }
-
-desktop_open() { desktop_ours || desktop_elsewhere; }
 
 DESKTOP_IN_THE_WAY="the Windows desktop is open, and Windows shows either its desktop or single apps, not both. Close the desktop window first"
 
@@ -373,16 +371,13 @@ cmd_status() {
   local vm
   vm_installed || { say "Windows VM is not set up (run: omarchy-windows-vm install)"; return 1; }
   vm=$(vm_state)
-  case $vm in
-  running)
-    if desktop_open; then
-      say "Windows VM running, desktop open"
-    else
-      say "Windows VM running, $(windows) app window(s), idle shutdown after $(idle_minutes) min"
-    fi
-    ;;
-  *) say "Windows VM $vm" ;;
-  esac
+  if [[ $vm != running ]]; then
+    say "Windows VM $vm"
+  elif desktop_open; then
+    say "Windows VM running, desktop open"
+  else
+    say "Windows VM running, $(windows) app window(s), idle shutdown after $(idle_minutes) min"
+  fi
 }
 
 cmd_start() {

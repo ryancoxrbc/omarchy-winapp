@@ -3,63 +3,15 @@
 # repository; the setup script next to the manifest runs `winapp setup`, which
 # does the rest and can be run again at any time.
 
+# winapp 2.0 and 2.1 could install this rule (`winapp passwordless on`), which
+# lets the user start and stop the VM without a password. The command is gone;
+# a rule left behind is still removed on uninstall, and `winapp doctor` says
+# how to remove it by hand. The directory is not readable, so whether it is
+# there is known only from the "passwordless" setting that command wrote.
 POLKIT_RULE=/etc/polkit-1/rules.d/49-winapp-$ME.rules
-
-# --- passwordless start and stop -----------------------------------------------
-# Without sudoless Docker, Omarchy starts and stops the VM through pkexec and
-# polkit asks for a password every time: on every cold start, and again when
-# the idle timer stops the VM. This rule waives the prompt for exactly those
-# actions of exactly Omarchy's helper. Creating, reconfiguring or removing the
-# VM still asks.
-polkit_rule() {
-  cat <<EOF
-// Installed by winapp (remove with: winapp passwordless off).
-// Lets $ME start and stop the Omarchy Windows VM without a password.
-polkit.addRule(function(action, subject) {
-  if (action.id == "org.freedesktop.policykit.exec" &&
-      subject.user == "$ME" &&
-      action.lookup("program") == "$VM_HELPER" &&
-      /^\\S+ __priv (up|up_wait|down)\$/.test(action.lookup("command_line"))) {
-    return polkit.Result.YES;
-  }
-});
-EOF
-}
 
 as_root() { # with a terminal sudo can ask; without one only polkit can
   if [[ -t 0 ]]; then sudo "$@"; else pkexec "$@"; fi
-}
-
-cmd_passwordless() {
-  local tmp
-  case ${1:-status} in
-  on)
-    tmp=$(mktemp) || die "could not create a temporary file"
-    polkit_rule >"$tmp"
-    as_root install -m 0644 -o root -g root "$tmp" "$POLKIT_RULE" || {
-      rm -f "$tmp"
-      die "could not install $POLKIT_RULE"
-    }
-    rm -f "$tmp"
-    cfg_set passwordless true
-    say "Starting and stopping Windows no longer asks for a password."
-    ;;
-  off)
-    as_root rm -f "$POLKIT_RULE" || die "could not remove $POLKIT_RULE"
-    cfg_set passwordless false
-    say "Starting and stopping Windows asks for a password again."
-    ;;
-  status)
-    if docker_direct; then
-      say "Not needed: sudoless Docker is on, so nothing here asks for a password."
-    elif [[ $(cfg .passwordless false) == true ]]; then
-      say "On: starting and stopping Windows does not ask for a password."
-    else
-      say "Off: Omarchy asks for a password to start and to stop Windows. Turn on with: winapp passwordless on"
-    fi
-    ;;
-  *) die "usage: winapp passwordless on | off | status" ;;
-  esac
 }
 
 # --- setup ---------------------------------------------------------------------
@@ -106,13 +58,15 @@ guest_prepared() { [[ $(cfg .guestPrepared "") == "$(vm_identity)" ]]; }
 
 guest_prepare() {
   local job
-  job=$(shares | jq -Rn '[inputs | split("\t")[0] | "\\\\tsclient\\" + .] as $pins
-    | {remoteapp: true, smbCache: true, pin: $pins}')
+  job=$(shares | jq -Rn '{remoteapp: true, smbCache: true, pin: [inputs | split("\t")[0] | "\\\\tsclient\\" + .]}')
+  frame_wanted && job=$(frame_job | jq -c --argjson job "$job" '$job + .')
   guest_run apply "$job" 120 || return 1
   if [[ $(guest_out '.echo') != "$(cat "$GUEST_DIR/probe.txt")" ]]; then
     GUEST_ERROR="Windows could not read the redirected folder"
     return 1
   fi
+  # cosmetic, so not a reason to call Windows unprepared; winapp doctor reports it
+  frame_wanted && { frame_noted || true; }
   cfg_set guestPrepared "$(vm_identity | jq -R .)"
 }
 
@@ -162,22 +116,9 @@ cmd_setup() {
     return 0
   fi
 
-  if ! docker_direct && [[ $(cfg .passwordless false) != true ]]; then
-    say ""
-    say "Omarchy asks for your password every time the Windows VM starts or stops,"
-    say "which includes the automatic stop after it has been idle."
-    if interactive && confirm "Allow starting and stopping it without a password? (installs one polkit rule)" yes; then
-      cmd_passwordless on
-    else
-      step "Left as it is. Change your mind with: winapp passwordless on"
-    fi
-  fi
-
   if [[ $scan == ask ]] && interactive && have gum; then
     say ""
-    if confirm "Start Windows now to prepare it and pick your apps? (about a minute)" yes; then
-      scan=yes
-    fi
+    confirm "Start Windows now to prepare it and pick your apps? (about a minute)" && scan=yes
   fi
   if [[ $scan == yes ]]; then
     step "Starting Windows…"
@@ -200,7 +141,7 @@ cmd_setup() {
 # --- uninstall -----------------------------------------------------------------
 
 cmd_uninstall() {
-  local purge=0 f id
+  local purge=0 f
   while (($#)); do
     case $1 in
     --purge) purge=1 ;;
@@ -210,7 +151,7 @@ cmd_uninstall() {
     shift
   done
   clients_alive && die "close the open Windows apps first"
-  confirm "Remove the Windows app menu entries, file associations and the winapp command? (the VM itself is not touched)" yes || die "cancelled"
+  confirm "Remove the Windows app menu entries, file associations and the winapp command? (the VM itself is not touched)" || die "cancelled"
   idle_cancel
 
   for f in "$APP_DIR"/winapp-*.desktop; do
@@ -226,7 +167,7 @@ cmd_uninstall() {
   if [[ $(cfg .passwordless false) == true ]]; then
     if as_root rm -f "$POLKIT_RULE"; then step "Removed $POLKIT_RULE"; else warn "could not remove $POLKIT_RULE"; fi
   fi
-  if [[ -L $BIN_LINK && $(realpath -- "$BIN_LINK" 2>/dev/null) == "$SELF" ]]; then
+  if cli_linked; then
     rm -f "$BIN_LINK"
     step "Removed $BIN_LINK"
   fi
@@ -239,7 +180,6 @@ cmd_uninstall() {
   else
     step "Kept your app list in $CONFIG_DIR (--purge removes it)"
   fi
-  id=$(plugin_id)
   say ""
-  say "To remove the bar widget too:  omarchy plugin remove $id"
+  say "To remove the bar widget too:  omarchy plugin remove $(plugin_id)"
 }

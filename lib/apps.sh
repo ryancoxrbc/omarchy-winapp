@@ -18,7 +18,7 @@ MIME_DIR=$DATA_HOME/mime
 MIMEAPPS=${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list
 FALLBACK_ICON=application-x-executable
 MENU_STAMP=$CACHE_DIR/menu.stamp
-COMMANDS='run|open|explorer|desktop|apps|scan|add|remove|manage|icons|sync|start|stop|idle|resources|status|state|shares|share|setup|doctor|uninstall|passwordless|logs|version|help'
+COMMANDS='run|open|explorer|desktop|apps|scan|add|remove|manage|icons|sync|start|stop|idle|resources|status|state|shares|share|setup|doctor|uninstall|logs|version|help'
 
 ensure_apps() {
   [[ -s $APPS_FILE ]] && return 0
@@ -35,20 +35,16 @@ app_field() { # app_field <id> <field>: a scalar field, empty when unset
   apps_json | jq -r --arg id "$1" --arg f "$2" '.apps[] | select(.id == $id) | .[$f] | select(. != null)'
 }
 
+app_list() { # app_list <id> <field>: a list field, one item per line
+  apps_json | jq -r --arg id "$1" --arg f "$2" '.apps[] | select(.id == $id) | (.[$f] // [])[]'
+}
+
 app_ids() { apps_json | jq -r '.apps[].id'; }
 
 # apps_update <jq filter> [jq options...]: rewrite apps.json in one step.
 apps_update() {
-  local filter=$1 tmp
-  shift
   ensure_apps
-  tmp=$(mktemp "$CONFIG_DIR/.apps.XXXXXX") || return 1
-  if jq "$@" "$filter" "$APPS_FILE" >"$tmp"; then
-    mv -f "$tmp" "$APPS_FILE"
-  else
-    rm -f "$tmp"
-    return 1
-  fi
+  json_edit "$APPS_FILE" "$@"
 }
 
 # --- file types ----------------------------------------------------------------
@@ -72,11 +68,9 @@ ext_mime() { # ext_mime <ext> <app name>
   </mime-type>
 </mime-info>
 EOF
-    MIME_DIRTY=1
   fi
   printf '%s\n' "$found"
 }
-MIME_DIRTY=0
 
 # MIME types some other installed app already opens. Read straight from the
 # association files: asking xdg-mime about each type takes seconds in total.
@@ -114,7 +108,7 @@ forget_associations() { # forget_associations <desktop id>
 # The path menu entries call: the link on PATH when it is ours, so entries
 # survive the plugin folder moving.
 exec_path() {
-  if [[ -L $BIN_LINK && $(realpath -- "$BIN_LINK" 2>/dev/null) == "$SELF" ]]; then
+  if cli_linked; then
     printf '%s\n' "$BIN_LINK"
   else
     printf '%s\n' "$SELF"
@@ -162,16 +156,14 @@ menu_stale() { [[ -s $APPS_FILE && $(menu_fingerprint) != "$(cat "$MENU_STAMP" 2
 
 # Regenerate the menu entries and file associations from the app list.
 sync_desktop() {
-  local id name shown icon categories own also mimes claim ext m f bin handled suffix taken keep=() wanted=()
+  local id name shown icon categories own also mimes claim ext m f bin suffix keep=() wanted=()
   local -A is_handled=() is_taken=()
   mkdir -p "$APP_DIR"
   bin=$(exec_word)
-  handled=$(handled_mimes)
-  while IFS= read -r m; do [[ -n $m ]] && is_handled[$m]=1; done <<<"$handled"
+  while IFS= read -r m; do [[ -n $m ]] && is_handled[$m]=1; done < <(handled_mimes)
   # "(Windows)" after a name: auto = only where another entry has that name
   suffix=$(cfg .windowsSuffix auto)
-  taken=$(other_menu_names)
-  while IFS= read -r m; do [[ -n $m ]] && is_taken[$m]=1; done <<<"$taken"
+  while IFS= read -r m; do [[ -n $m ]] && is_taken[$m]=1; done < <(other_menu_names)
 
   while IFS= read -r id; do
     name=$(app_field "$id" name)
@@ -182,18 +174,16 @@ sync_desktop() {
     icon=$(app_field "$id" icon)
     categories=$(app_field "$id" categories)
     # its own types (ext, mime) and the ones it merely can open (opens)
-    own=$(apps_json | jq -r --arg id "$id" '.apps[] | select(.id == $id) | (.mime // [])[]')
+    own=$(app_list "$id" mime)
     while IFS= read -r ext; do
-      [[ -n $ext ]] || continue
       m=$(ext_mime "$ext" "${name:-$id}")
       [[ -n $m ]] && own+=$'\n'$m && wanted+=("winapp-${ext,,}.xml")
-    done < <(apps_json | jq -r --arg id "$id" '.apps[] | select(.id == $id) | (.ext // [])[]')
+    done < <(app_list "$id" ext)
     also=""
     while IFS= read -r ext; do
-      [[ -n $ext ]] || continue
       m=$(ext_mime "$ext" "${name:-$id}")
       [[ -n $m ]] && also+=$'\n'$m && wanted+=("winapp-${ext,,}.xml")
-    done < <(apps_json | jq -r --arg id "$id" '.apps[] | select(.id == $id) | (.opens // [])[]')
+    done < <(app_list "$id" opens)
     own=$(sed '/^$/d' <<<"$own" | sort -u)
     mimes=$(printf '%s\n%s\n' "$own" "$also" | sed '/^$/d' | sort -u)
 
@@ -228,23 +218,17 @@ sync_desktop() {
   done < <(app_ids)
 
   for f in "$APP_DIR"/winapp-*.desktop; do
-    [[ -e $f ]] || continue
-    if [[ " ${keep[*]} " != *" ${f##*/} "* ]]; then
-      rm -f "$f"
-      forget_associations "${f##*/}"
-    fi
+    [[ -e $f && " ${keep[*]} " != *" ${f##*/} "* ]] || continue
+    rm -f "$f"
+    forget_associations "${f##*/}"
   done
   for f in "$MIME_DIR"/packages/winapp-*.xml; do
-    [[ -e $f ]] || continue
-    if [[ " ${wanted[*]} " != *" ${f##*/} "* ]]; then
-      rm -f "$f"
-      MIME_DIRTY=1
-    fi
+    [[ -e $f && " ${wanted[*]} " != *" ${f##*/} "* ]] || continue
+    rm -f "$f"
   done
-  if ((MIME_DIRTY)); then
-    update-mime-database "$MIME_DIR" >/dev/null 2>&1
-    MIME_DIRTY=0
-  fi
+  # Every time: it is quick, and ext_mime, which writes a new type, is always
+  # called inside $( ) and so cannot say that it did.
+  [[ -d $MIME_DIR/packages ]] && update-mime-database "$MIME_DIR" >/dev/null 2>&1
   update-desktop-database "$APP_DIR" >/dev/null 2>&1
   mkdir -p "$CACHE_DIR"
   menu_fingerprint >"$MENU_STAMP"
@@ -299,14 +283,6 @@ installed() { # installed [all]
     | map(. + {added: ($have[.id] == true)})
     | sort_by((.known | not), (.name | ascii_downcase))
   ' "$SCAN_FILE"
-}
-
-have_scan() { [[ -s $SCAN_FILE ]]; }
-
-need_scan() { # make sure there is a scan to read, running one if not
-  have_scan && return 0
-  say "Looking at what is installed in Windows…" >&2
-  scan_guest || die "$GUEST_ERROR"
 }
 
 # --- icons and per-app guest settings ------------------------------------------
@@ -384,7 +360,7 @@ cmd_scan() {
     shift
   done
   if ((cached)); then
-    have_scan || die "nothing scanned yet; run: winapp scan"
+    [[ -s $SCAN_FILE ]] || die "nothing scanned yet; run: winapp scan"
   else
     ((json)) || say "Looking at what is installed in Windows…" >&2
     scan_guest || die "$GUEST_ERROR"
@@ -429,11 +405,14 @@ cmd_add() {
 
   # With no --exe and no such app yet, the id names something the scan found.
   if [[ -z $exe && -z $(app_field "$id" exe) ]]; then
-    need_scan
+    if [[ ! -s $SCAN_FILE ]]; then
+      say "Looking at what is installed in Windows…" >&2
+      scan_guest || die "$GUEST_ERROR"
+    fi
     found=$(installed all | jq -c --arg id "$id" 'map(select(.id == $id))[0] // empty')
     [[ -n $found ]] || die "nothing called '$id' was found in Windows. List what is there with: winapp scan
 Or give the program yourself: winapp add $id --exe 'C:\\Program Files\\...\\app.exe'"
-    apps_update '.apps += [$app | {id, name, label, exe, ext, opens, categories} + (if .args != "" then {args} else {} end)
+    apps_update '.apps += [$app | {id, name, label, exe, ext, opens, categories, args}
         | with_entries(select(.value != "" and .value != []))]' --argjson app "$found"
   fi
 
@@ -476,7 +455,7 @@ cmd_icons() { # fetch icons again, for every app or the ones named
   local ids=("$@")
   ((${#ids[@]})) || mapfile -t ids < <(app_ids)
   ((${#ids[@]})) || die "no apps yet"
-  clients_alive && die "close the open Windows apps and desktop first (this needs the VM's only session)"
+  clients_alive && die "$SESSION_IN_USE"
   guest_refresh "${ids[@]}"
   sync_desktop
 }
@@ -492,18 +471,16 @@ cmd_manage() {
   local list line id was picked="" chosen=() add=() drop=() selected=() labels=() take=yes
   local -A id_of=()
   have gum || die "winapp manage needs gum (omarchy pkg add gum). Without it: winapp scan, then winapp add <id>"
-  clients_alive && die "close the open Windows apps and desktop first (this needs the VM's only session)"
+  clients_alive && die "$SESSION_IN_USE"
   say "Looking at what is installed in Windows…"
   scan_guest || die "$GUEST_ERROR"
   list=$(installed | jq -r '.[] | [.id, (.name + (if (.ext | length) > 0 then "  (" + (.ext | map("." + .) | .[0:4] | join(" ")) + ")" else "" end) | gsub(","; " ")),
       (if .added then "1" else "0" end)] | join("\t")')
   [[ -n $list ]] || die "no programs were found in Windows. Install one from the desktop first: winapp desktop"
-  while IFS=$'\t' read -r id line _; do
+  while IFS=$'\t' read -r id line was; do
     id_of[$line]=$id
     labels+=("$line")
-  done <<<"$list"
-  while IFS=$'\t' read -r id line picked; do
-    [[ $picked == 1 ]] && selected+=("$line")
+    [[ $was == 1 ]] && selected+=("$line")
   done <<<"$list"
 
   picked=$(printf '%s\n' "${labels[@]}" | gum choose --no-limit --height=20 \
@@ -532,10 +509,9 @@ cmd_manage() {
     say "Removed $id"
   done
   if ((${#add[@]})); then
-    confirm "Open the new apps' own file types with them by default? (No keeps your current default apps)" yes || take=no
+    confirm "Open the new apps' own file types with them by default? (No keeps your current default apps)" || take=no
     for id in "${add[@]}"; do
-      apps_update '.apps += [$app | {id, name, label, exe, ext, opens, categories}
-          + (if .args != "" then {args} else {} end)
+      apps_update '.apps += [$app | {id, name, label, exe, ext, opens, categories, args}
           + (if $take == "yes" then {default: true} else {} end)
           | with_entries(select(.value != "" and .value != []))]' \
         --argjson app "$(installed all | jq -c --arg id "$id" 'map(select(.id == $id))[0]')" --arg take "$take"

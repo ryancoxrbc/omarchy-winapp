@@ -93,7 +93,7 @@ read -r LISTEN_PORT <&"$listener"
 load() {
   SELF=$WINAPP
   # shellcheck source=/dev/null
-  for lib in common config vm rdp paths launch guest apps resources doctor setup; do source "$ROOT/lib/$lib.sh"; done
+  for lib in common config vm rdp paths launch guest frame apps resources doctor setup; do source "$ROOT/lib/$lib.sh"; done
 }
 
 group() { # group <name>: true when this group should run
@@ -162,6 +162,7 @@ if group "apps: the list, menu entries and file types"; then (
   lacks "…by a path xdg-mime can resolve, so not quoted" "$entry" 'Exec="'
   has "…and lists its file types" "$entry" "MimeType="
   has "an unknown extension gets a private type" "$entry" "application/x-winapp-qzx9"
+  has "…which is registered with the system at once" "$(cat "$STUB_OUT/desktop.calls")" "update-mime-database"
   has "…registered for that extension" "$(cat "$XDG_DATA_HOME/mime/packages/winapp-qzx9.xml")" '<glob pattern="*.qzx9"/>'
   has "--default claims the app's own types" "$(cat "$STUB_OUT/desktop.calls")" "xdg-mime default winapp-coreldraw.desktop"
   lacks "…but not the ones it merely can open" "$(grep 'xdg-mime default' "$STUB_OUT/desktop.calls")" "svg"
@@ -254,9 +255,9 @@ if group "launch: starting the VM and an app"; then (
   # Docker is reachable but the bind anchors are not mounted, as after a reboot
   has "the VM was started through Omarchy's helper" "$(cat "$STUB_OUT/pkexec.calls")" "$WINAPP_VM_HELPER __priv up_wait"
   rdp=$(cat "$STUB_OUT/launch.rdp" 2>/dev/null)
-  has "the program travels in the connection file" "$rdp" 'remoteapplicationprogram:s:C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE'
-  has "…with fixed arguments and the quoted file, apostrophe and comma intact" "$rdp" \
-    'remoteapplicationcmdline:s:/q "\\tsclient\home\Documents\Sam'"'"'s report, final.docx"'
+  has "the app is started through the frame program, named in the connection file" "$rdp" 'remoteapplicationprogram:s:C:\ProgramData\winapp\winapp-frame.exe'
+  has "…which gets the app, its fixed arguments and the quoted file, apostrophe and comma intact" "$rdp" \
+    'remoteapplicationcmdline:s:"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE" /q "\\tsclient\home\Documents\Sam'"'"'s report, final.docx"'
   args=$(cat "$STUB_OUT/client.args" 2>/dev/null)
   if command -v cc >/dev/null && [[ -e /usr/include/X11/Xlib.h ]]; then
     has "the helper-window fix is built and loaded into the client" "$(cat "$STUB_OUT/client.preload")" "$XDG_DATA_HOME/winapp/xshim.so"
@@ -289,6 +290,7 @@ if group "launch: starting the VM and an app"; then (
   out=$("$WINAPP" run 'C:\gone\app.exe' 2>&1)
   is "a program Windows cannot start is an error" "$?" "1"
   has "…that says what to do" "$out" "winapp scan"
+  is "…reached after trying once more without the frame program" "$(jq -r '.guestFrame.ok' "$XDG_CONFIG_HOME/winapp/config.json")" "false"
   rm -f "$STUB_OUT/client.fail"
 
   # Windows shows its desktop or single apps, never both
@@ -306,6 +308,85 @@ if group "launch: starting the VM and an app"; then (
 
   refuses "an unknown app is an error" "$WINAPP" nosuchapp
   refuses "a missing file is an error" "$WINAPP" word "$HOME/Documents/missing.docx"
+  "$WINAPP" stop >/dev/null 2>&1
+  exit $failed
+); failed=$((failed + $?)); fi
+
+# -------------------------------------------------------------------------------
+if group "frames and keys: fitting a tiling desktop"; then (
+  failed=0
+  load
+  "$WINAPP" add word --exe 'C:\Office\WINWORD.EXE' --name "Microsoft Word" --icon "$ROOT/tests/fixtures/icon.png" >/dev/null 2>&1
+  : >"$STUB_OUT/window-open"
+  rdp_credentials
+  runs() { wc -l <"$STUB_OUT/guest.runs" 2>/dev/null || echo 0; }
+  # start an app the way a launch does, and give back its connection file
+  spawned() {
+    rm -f "$STUB_OUT/launch.rdp"
+    vm_up >/dev/null 2>&1
+    mkdir -p "$RUN_DIR/clients"
+    app_spawn "$TMP/world/spawn.log" Word 'C:\Office\WINWORD.EXE' "$1" >/dev/null 2>&1
+    kill "$RDP_PID" 2>/dev/null
+    wait "$RDP_PID" 2>/dev/null
+    rm -f "$RUN_DIR/clients/$RDP_PID"
+    cat "$STUB_OUT/launch.rdp"
+  }
+
+  frame_wanted && pass || fail "window frames are tidied unless switched off"
+  rdp=$(spawned '/q "x.docx"')
+  has "an app is started through the frame program" "$rdp" 'remoteapplicationprogram:s:C:\ProgramData\winapp\winapp-frame.exe'
+  has "…which is handed the app and its arguments" "$rdp" 'remoteapplicationcmdline:s:"C:\Office\WINWORD.EXE" /q "x.docx"'
+  is "it was built in Windows first" "$(runs)" "1"
+  is "…with the settings" "$(jq -c '.frame | {titleBars, roundedCorners, keep}' "$STUB_OUT/guest.in.json")" \
+    '{"titleBars":false,"roundedCorners":false,"keep":[]}'
+  [[ -s $GUEST_DIR/frame.cs ]] && pass || fail "…and its source sent along"
+  rdp=$(spawned '')
+  has "an app without arguments is handed over just the same" "$rdp" 'remoteapplicationcmdline:s:"C:\Office\WINWORD.EXE"'
+  is "nothing is built again for the next app" "$(runs)" "1"
+  is "the Super key stays with the Linux desktop" "$(cat "$STUB_OUT/client.super")" ""
+
+  apps_update '(.apps[] | select(.id == "word") | .titleBar) = true'
+  frame_current && fail "an app that keeps its title bar puts the VM's settings out of date" || pass
+  spawned '' >/dev/null
+  is "…so they are sent again" "$(runs)" "2"
+  is "…naming the program to leave alone" "$(jq -c '.frame.keep' "$STUB_OUT/guest.in.json")" '["WINWORD.EXE"]'
+
+  cfg_set roundedCorners true
+  rdp_spawn xfreerdp3 "$TMP/world/open.log" ""
+  : >"$RUN_DIR/clients/$RDP_PID"
+  sleep 0.3
+  frame_refresh
+  is "nothing is sent while an app is open: that would take its session" "$(runs)" "2"
+  kill "$RDP_PID"
+  wait "$RDP_PID" 2>/dev/null
+  rm -f "$RUN_DIR/clients/$RDP_PID"
+  spawned '' >/dev/null
+  is "…it goes with the next app started from cold" "$(runs)" "3"
+  is "…carrying the changed setting" "$(jq -c '.frame.roundedCorners' "$STUB_OUT/guest.in.json")" "true"
+
+  cfg_set titleBars true
+  frame_wanted && fail "with both left to Windows there is nothing to do" || pass
+  rdp=$(spawned '/q')
+  has "…and the app is started directly" "$rdp" 'remoteapplicationprogram:s:C:\Office\WINWORD.EXE'
+  has "…with its own arguments" "$rdp" 'remoteapplicationcmdline:s:/q'
+  is "…with nothing sent to Windows" "$(runs)" "3"
+
+  cfg_set titleBars false
+  is "back to settings the VM already has: nothing to send" "$(spawned '' >/dev/null; runs)" "3"
+  cfg_set roundedCorners false
+  printf '{"frame":{"status":"failed: no compiler"}}\n' >"$STUB_OUT/guest.json"
+  rdp=$(spawned '/q')
+  is "a changed setting is sent" "$(runs)" "4"
+  has "when Windows cannot build the program the app is started directly" "$rdp" 'remoteapplicationprogram:s:C:\Office\WINWORD.EXE'
+  spawned '/q' >/dev/null
+  is "…and the build is not tried again with every app" "$(runs)" "4"
+  rm -f "$STUB_OUT/guest.json"
+  succeeds "it can be built again on request" frame_install
+  frame_usable && pass || fail "…and is used again"
+
+  cfg_set superKey '"windows"'
+  spawned '' >/dev/null
+  is "superKey: windows hands the Super key to Windows" "$(cat "$STUB_OUT/client.super")" "windows"
   "$WINAPP" stop >/dev/null 2>&1
   exit $failed
 ); failed=$((failed + $?)); fi
@@ -354,26 +435,6 @@ if group "access: with and without Docker"; then (
   rm -f "$STUB_OUT/helper.fail"
   [[ ! -e $STUB_OUT/docker.calls ]] && pass || fail "Docker is never called without access" "$(cat "$STUB_OUT/docker.calls" 2>/dev/null)"
 
-  rule=$(polkit_rule)
-  has "the polkit rule names the helper" "$rule" "action.lookup(\"program\") == \"$WINAPP_VM_HELPER\""
-  if command -v node >/dev/null; then
-    verdict() { # verdict <user> <program> <command line>
-      node -e '
-        let rule; const polkit = { addRule: f => rule = f, Result: { YES: "yes" } };
-        eval(require("fs").readFileSync(0, "utf8"));
-        const [user, program, command] = process.argv.slice(1);
-        const action = { id: "org.freedesktop.policykit.exec", lookup: k => ({ program, command_line: command })[k] };
-        console.log(rule(action, { user }) || "ask");' "$@" <<<"$rule"
-    }
-    h=$WINAPP_VM_HELPER
-    is "the rule waives the prompt for starting" "$(verdict "$ME" "$h" "$h __priv up_wait")" "yes"
-    is "…and for stopping" "$(verdict "$ME" "$h" "$h __priv down")" "yes"
-    is "…but not for removing the VM" "$(verdict "$ME" "$h" "$h __priv remove")" "ask"
-    is "…or rewriting its configuration" "$(verdict "$ME" "$h" "$h __priv write_compose")" "ask"
-    is "…or with anything appended" "$(verdict "$ME" "$h" "$h __priv down; rm -rf /")" "ask"
-    is "…or for another program" "$(verdict "$ME" /usr/bin/bash "/usr/bin/bash __priv down")" "ask"
-    is "…or for another user" "$(verdict somebody "$h" "$h __priv down")" "ask"
-  fi
   exit $failed
 ); failed=$((failed + $?)); fi
 
@@ -381,9 +442,7 @@ if group "access: with and without Docker"; then (
 if group "settings and failure messages"; then (
   failed=0
   load
-  echo 15 >"$TMP/idle" && mkdir -p "$CONFIG_DIR" && cp "$TMP/idle" "$CONFIG_DIR/idle-minutes"
-  is "the 1.x idle setting is carried over" "$(idle_minutes)" "15"
-  [[ ! -e $CONFIG_DIR/idle-minutes ]] && pass || fail "…and its old file removed"
+  is "the idle timeout defaults to five minutes" "$(idle_minutes)" "5"
   "$WINAPP" idle 0
   is "idle 0 means never" "$("$WINAPP" state | jq -r .idleMinutes)" "0"
   refuses "idle wants a number" "$WINAPP" idle soon

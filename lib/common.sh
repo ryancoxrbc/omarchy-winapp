@@ -37,6 +37,22 @@ die() {
 
 ensure_dirs() { mkdir -p "$RUN_DIR" "$LOG_DIR" && chmod 700 "$RUN_DIR"; }
 
+# True when the winapp on PATH is a link to this one.
+cli_linked() { [[ -L $BIN_LINK && $(realpath -- "$BIN_LINK" 2>/dev/null) == "$SELF" ]]; }
+
+# json_edit <file> <jq filter> [jq options...]: rewrite a JSON file in one step.
+json_edit() {
+  local file=$1 filter=$2 tmp
+  shift 2
+  tmp=$(mktemp "${file%/*}/.${file##*/}.XXXXXX") || return 1
+  if jq "$@" "$filter" "$file" >"$tmp"; then
+    mv -f "$tmp" "$file"
+  else
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
 # with_lock <name> <command...>: run the command holding an exclusive lock, so
 # two launches started together do not both try to boot or sign in to the VM.
 LOCK_FDS=()
@@ -68,36 +84,27 @@ detached() { (
   setsid -f "$@" >/dev/null 2>&1
 ); }
 
-# The newest logs are the ones worth keeping for a bug report.
-prune_logs() {
-  local f
+new_log() { # new_log <kind> -> prints the path
+  local kind=${1//[^A-Za-z0-9_-]/_} f
+  ensure_dirs
+  # The newest logs are the ones worth keeping for a bug report.
   # shellcheck disable=SC2012 # names are ours: <kind>-<epoch>.log
   ls -1t "$LOG_DIR"/*.log 2>/dev/null | tail -n +21 | while IFS= read -r f; do rm -f -- "$f"; done
-}
-
-new_log() { # new_log <kind> -> prints the path
-  ensure_dirs
-  prune_logs
-  local kind=${1//[^A-Za-z0-9_-]/_}
   printf '%s/%s-%s.log\n' "$LOG_DIR" "$kind" "$(date +%Y%m%d-%H%M%S)-$$"
 }
 
 # True when asked from a terminal someone can answer in.
 interactive() { [[ -t 0 && -t 1 ]]; }
 
-confirm() { # confirm <question> [default: yes|no]
-  local question=$1 default=${2:-yes} answer
+confirm() { # confirm <question>: yes unless the answer is no
+  local answer
   if ((ASSUME_YES)); then return 0; fi
-  interactive || { [[ $default == yes ]]; return; }
+  interactive || return 0
   if have gum; then
-    if [[ $default == yes ]]; then gum confirm "$question"; else gum confirm --default=false "$question"; fi
+    gum confirm "$1"
     return
   fi
-  read -r -p "$question [$([[ $default == yes ]] && echo Y/n || echo y/N)] " answer
-  case ${answer,,} in
-  y | yes) return 0 ;;
-  n | no) return 1 ;;
-  *) [[ $default == yes ]] ;;
-  esac
+  read -r -p "$1 [Y/n] " answer
+  [[ ${answer,,} != n && ${answer,,} != no ]]
 }
 ASSUME_YES=0

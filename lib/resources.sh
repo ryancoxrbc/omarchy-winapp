@@ -12,20 +12,18 @@
 HOST_CORES=$(nproc 2>/dev/null || echo 1)
 HOST_RAM_GB=$(awk '/^MemTotal:/ { printf "%d", $2 / 1048576 }' /proc/meminfo 2>/dev/null)
 
-# What the VM is set to, as "<ram> <cores>" (for example "16G 4"); nothing
-# when it cannot be told. The compose file says, when it can be read (sudoless
-# Docker); otherwise a running VM shows what it was started with, and failing
-# that the values last set from here are remembered.
 # The command line of the VM's emulator, when it is running. dockur names the
 # process "windows", so it has to be found by its arguments.
 qemu_args() { pgrep -af 'qemu-system' 2>/dev/null | grep -m1 -- ' -name windows'; }
 
+# What the VM is set to, as "<ram> <cores>" (for example "16G 4"); nothing
+# when it cannot be told. The compose file says, when it can be read (sudoless
+# Docker); otherwise a running VM shows what it was started with, and failing
+# that the values last set from here are remembered.
 vm_resources() {
-  local ram="" cores="" args
-  if [[ -r $COMPOSE ]]; then
-    ram=$(compose_value RAM_SIZE)
-    cores=$(compose_value CPU_CORES)
-  fi
+  local ram cores args
+  ram=$(compose_value RAM_SIZE)
+  cores=$(compose_value CPU_CORES)
   if [[ -z $ram || -z $cores ]]; then
     args=" $(qemu_args) "
     [[ $args =~ \ -m\ ([0-9]+G)\  ]] && ram=${BASH_REMATCH[1]}
@@ -39,10 +37,8 @@ vm_resources() {
 # The disk size the VM was created with, as dockur wants it ("100G").
 vm_disk() {
   local disk bytes
-  if [[ -r $COMPOSE ]]; then
-    disk=$(compose_value DISK_SIZE)
-    [[ $disk =~ ^[0-9]+G$ ]] && { echo "$disk"; return 0; }
-  fi
+  disk=$(compose_value DISK_SIZE)
+  [[ $disk =~ ^[0-9]+G$ ]] && { echo "$disk"; return 0; }
   # the image is exactly as large as the size it was created with
   bytes=$(stat -Lc %s "$STORAGE_DIR/data.img" 2>/dev/null) || return 1
   ((bytes > 0 && bytes % 1073741824 == 0)) || return 1
@@ -64,8 +60,7 @@ resources_write() { # resources_write <ram> <cores>
   disk=$(vm_disk) || die "could not tell the VM's disk size, so its configuration was left alone"
   [[ -r $CREDENTIALS || -r $COMPOSE ]] || die "could not read the VM's account ($CREDENTIALS), so its configuration was left alone"
   rdp_credentials
-  tz=""
-  [[ -r $COMPOSE ]] && tz=$(compose_value TZ)
+  tz=$(compose_value TZ)
   [[ -n $tz ]] || tz=$(timedatectl show -p Timezone --value 2>/dev/null)
   [[ -n $tz ]] || tz=UTC
   [[ -x $VM_HELPER ]] || die "Omarchy's Windows VM helper is missing ($VM_HELPER); run: omarchy update"
@@ -78,40 +73,17 @@ resources_write() { # resources_write <ram> <cores>
   cfg_set vmCores "$cores"
 }
 
-resources_show() {
-  local now ram cores
-  now=$(vm_resources)
-  if [[ -z $now ]]; then
+resources_show() { # resources_show <ram> <cores>: both empty when not known
+  if [[ -z $1 ]]; then
     say "Windows VM: memory and processors are not known yet (they show once it has run)"
   else
-    read -r ram cores <<<"$now"
-    say "Windows VM: ${ram%G} GB of memory, $cores processor$([[ $cores == 1 ]] || echo s)"
+    say "Windows VM: ${1%G} GB of memory, $2 processor$([[ $2 == 1 ]] || echo s)"
   fi
   say "This computer: $HOST_RAM_GB GB, $HOST_CORES processors"
 }
 
-# Ask for both in a terminal; what the bar panel opens.
-resources_pick() {
-  local now ram="" cores="" size options=() picked
-  have gum || die "this needs gum (omarchy pkg add gum). Without it: winapp resources --ram <GB> --cores <n>"
-  now=$(vm_resources)
-  [[ -n $now ]] && read -r ram cores <<<"$now"
-  resources_show
-  say ""
-  for size in 2 4 6 8 12 16 24 32 48 64 96 128; do
-    ((size <= HOST_RAM_GB)) && options+=("${size}G")
-  done
-  picked=$(printf '%s\n' "${options[@]}" | gum choose --header="Memory for Windows" --selected="${ram:-4G}") || die "cancelled"
-  PICK_RAM=$picked
-  options=()
-  for ((size = 1; size <= HOST_CORES; size++)); do options+=("$size"); done
-  picked=$(printf '%s\n' "${options[@]}" | gum choose --height=12 --header="Processors for Windows" --selected="${cores:-2}") || die "cancelled"
-  PICK_CORES=$picked
-}
-PICK_RAM="" PICK_CORES=""
-
 cmd_resources() {
-  local ram="" cores="" pick=0 json=0 now old_ram="" old_cores=""
+  local ram="" cores="" pick=0 json=0 now old_ram="" old_cores="" size options=()
   while (($#)); do
     case $1 in
     --ram) ram=${2:?--ram needs a size in GB, for example 8} && shift ;;
@@ -132,10 +104,19 @@ cmd_resources() {
     return
   fi
   if ((pick)); then
-    resources_pick
-    ram=$PICK_RAM cores=$PICK_CORES
+    # ask for both in a terminal; what the bar panel opens
+    have gum || die "this needs gum (omarchy pkg add gum). Without it: winapp resources --ram <GB> --cores <n>"
+    resources_show "$old_ram" "$old_cores"
+    say ""
+    for size in 2 4 6 8 12 16 24 32 48 64 96 128; do
+      ((size <= HOST_RAM_GB)) && options+=("${size}G")
+    done
+    ram=$(printf '%s\n' "${options[@]}" | gum choose --header="Memory for Windows" --selected="${old_ram:-4G}") || die "cancelled"
+    options=()
+    for ((size = 1; size <= HOST_CORES; size++)); do options+=("$size"); done
+    cores=$(printf '%s\n' "${options[@]}" | gum choose --height=12 --header="Processors for Windows" --selected="${old_cores:-2}") || die "cancelled"
   elif [[ -z $ram && -z $cores ]]; then
-    resources_show
+    resources_show "$old_ram" "$old_cores"
     say ""
     say "Change with: winapp resources --ram <GB> --cores <n>"
     return

@@ -45,12 +45,14 @@ and open the app again.
 ## The VM
 
 **It asks for my password a lot.**
-Without sudoless Docker, Omarchy asks on every start and stop. `winapp
-passwordless on` waives the prompt for those two actions only.
+Without sudoless Docker, Omarchy asks on every start and stop, including the
+automatic stop after the VM has sat idle. Turning on sudoless Docker in Omarchy
+is the way to stop the prompts; a longer `idleMinutes`, or `0`, makes the
+automatic stop rarer.
 
 **It asks once after every reboot even with sudoless Docker.**
 Expected: the mounts between your home folder and the VM have to be recreated
-by root after a reboot. `winapp passwordless on` covers this too.
+by root after a reboot.
 
 **It stops while I am still using it.**
 The idle timer only runs while no app window is open. A program that sits in
@@ -89,6 +91,22 @@ Set `"scale"` in `~/.config/winapp/config.json` to a percentage, for example
 **The wrong keyboard layout.**
 Add your layout to `"rdpArgs"`, for example `["/kbd:layout:0x0407"]` for
 German. `xfreerdp3 /list:kbd` lists the ids.
+
+**An app still has its title bar and buttons.**
+Office and other programs that draw their own title bar keep it: it is part of
+the program, not something Windows adds. For a program with an ordinary Windows
+title bar, run `winapp doctor --deep`; it rebuilds the piece that removes it
+and says so if Windows would not. Dialogs keep their title on purpose.
+
+**I want the Windows title bar, or rounded corners, back.**
+Set `"titleBars": true` or `"roundedCorners": true` in
+`~/.config/winapp/config.json`, or `"titleBar": true` on one app in
+`apps.json`. Windows that are already open keep the look they have.
+
+**The Windows key does nothing in Windows.**
+That is deliberate: Super belongs to Omarchy's shortcuts, and passing it on
+made the Start menu open whenever you switched workspace. Ctrl+Esc opens the
+Start menu. `"superKey": "windows"` in `config.json` passes the key through.
 
 **Splash screens and tool windows tile.**
 They are ordinary windows to Hyprland. A window rule for the class `winapp`

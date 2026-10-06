@@ -1,5 +1,41 @@
 # Changelog
 
+## 2.2.0 - 2026-10-05
+
+### Added
+
+- App windows no longer carry the title bar Windows draws (the program's name
+  and the minimise, maximise and close buttons), and no window has Windows 11's
+  rounded corners. A menu bar stays where it is, and dialogs keep their title.
+  A small program built inside the VM does this; apps are started through it.
+  Programs that draw their own title bar, such as Office, keep it and get
+  square corners. `"titleBars": true` and `"roundedCorners": true` in
+  `config.json` switch either off, and `"titleBar": true` on an app keeps that
+  app's title bar.
+
+### Fixed
+
+- Windows' Start menu no longer opens when you switch workspace away from a
+  Windows window, or tap Super in one. The Super key and anything pressed with
+  it now stay with Omarchy. `"superKey": "windows"` restores the old behaviour.
+- A file type Linux does not know (for example `.sldprt`) is registered with
+  the system as soon as its app is added. Before, the type was written but the
+  system's database was not refreshed, so double-clicking such a file could
+  fail until something else refreshed it.
+- `winapp doctor` shows its ticks and crosses in colour in a terminal again.
+
+### Removed
+
+- `winapp passwordless` and the polkit rule it installed. If you switched it on
+  with 2.0 or 2.1, the rule still works; `winapp doctor` shows how to remove
+  it, and `winapp uninstall` removes it.
+
+### Changed
+
+- Internal tidy-up with no change in behaviour: duplicated code merged,
+  single-use helpers folded into their callers, and the carry-over of a
+  setting from the unpublished 1.x removed.
+
 ## 2.1.0 - 2026-10-05
 
 ### Added

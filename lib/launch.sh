@@ -23,6 +23,15 @@ win_args() {
 app_spawn() { # app_spawn <log> <title> <exe> <command line>
   local log=$1 title=$2 exe=$3 cmdline=$4 file=$RUN_DIR/launch-$$.rdp i n
   local -a args
+  # Through the frame program when this VM has it: it starts the app and keeps
+  # the session's windows free of Windows' title bar and rounded corners.
+  frame_refresh
+  FRAMED=0
+  if frame_wanted && frame_usable; then
+    cmdline="\"$exe\"${cmdline:+ $cmdline}"
+    exe=$FRAME_EXE
+    FRAMED=1
+  fi
   # The program and its arguments travel in a connection file: its values are
   # taken literally, while /app:...,cmd:... is a comma-separated list whose
   # parser gives up on a file name with an apostrophe in it.
@@ -68,15 +77,14 @@ app_watch() { # app_watch <log> <exe>
   local log=$1 exe=$2 seen=$SEEN gone=0 blind=0 n
   while kill -0 "$RDP_PID" 2>/dev/null; do
     sleep 2
-    if n=$(windows "$RDP_PID") && [[ -n $n ]]; then
-      if ((n > 0)); then
-        seen=1 gone=0
-      elif ((seen)) && ((++gone >= 4)); then
-        kill "$RDP_PID" 2>/dev/null
-      elif ((!seen)) && ((++blind >= 90)); then
-        # three minutes and nothing to show for it
-        kill "$RDP_PID" 2>/dev/null
-      fi
+    n=$(windows "$RDP_PID") && [[ -n $n ]] || continue
+    if ((n > 0)); then
+      seen=1 gone=0
+    elif ((seen)) && ((++gone >= 4)); then
+      kill "$RDP_PID" 2>/dev/null
+    elif ((!seen)) && ((++blind >= 90)); then
+      # three minutes and nothing to show for it
+      kill "$RDP_PID" 2>/dev/null
     fi
   done
   wait "$RDP_PID" 2>/dev/null
@@ -101,13 +109,19 @@ launch() {
   exe=${exe//\//\\} # the config may use either slash
   desktop_open && die "$DESKTOP_IN_THE_WAY"
   mkdir -p "$RUN_DIR/clients"
-  for _ in 1 2; do
+  for _ in 1 2 3; do
     vm_up "The app opens when the VM is up."
     commit_drives
     log=$(new_log "$kind")
     with_lock launch app_spawn "$log" "$title" "$exe" "$cmdline"
     app_watch "$log" "$exe"
     rc=$?
+    if ((rc == 1 && FRAMED)) && [[ $(rdp_failure "$log") == exec ]]; then
+      # The frame program is gone from the VM, or Windows will not run it:
+      # start apps directly from here on. `winapp setup` puts it back.
+      frame_record false
+      continue
+    fi
     ((rc == 2)) || break
     # Windows was restarted behind our back: claim its session again and retry.
     rm -f "$RUN_DIR/primed" "$RUN_DIR/boot"

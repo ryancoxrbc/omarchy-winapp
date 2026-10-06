@@ -24,18 +24,17 @@ expand_path() { # ~ and $HOME in a configured path; no trailing slash
   printf '%s\n' "$p"
 }
 
-shares() { # configured shares that exist, as name<TAB>directory
+shares() { # shares [all]: configured shares as name<TAB>directory; without "all", only those that exist
   local name dir
   cfg_json | jq -r '.shares[]? | "\(.name)\t\(.path)"' | while IFS=$'\t' read -r name dir; do
     dir=$(expand_path "$dir")
-    [[ -d $dir ]] && printf '%s\t%s\n' "$name" "$dir"
+    [[ ${1:-} == all || -d $dir ]] && printf '%s\t%s\n' "$name" "$dir"
   done
 }
 
 all_drives() {
   shares
   cat "$DRIVES_FILE" "$DRIVES_PENDING" 2>/dev/null | sort -u
-  return 0
 }
 
 commit_drives() { # once the VM is up: this launch's drives join the boot's list
@@ -143,8 +142,8 @@ drive_args() {
 cmd_shares() {
   local name dir
   {
-    cfg_json | jq -r '.shares[]? | "\(.name)\t\(.path)"' | while IFS=$'\t' read -r name dir; do
-      printf '%s\t%s\t%s\n' "$name" "\\\\tsclient\\$name" "$(expand_path "$dir")$([[ -d $(expand_path "$dir") ]] || echo "  (missing)")"
+    shares all | while IFS=$'\t' read -r name dir; do
+      printf '%s\t%s\t%s\n' "$name" "\\\\tsclient\\$name" "$dir$([[ -d $dir ]] || echo "  (missing)")"
     done
     [[ -s $DRIVES_FILE ]] && sort -u "$DRIVES_FILE" | while IFS=$'\t' read -r name dir; do
       printf '%s\t%s\t%s\n' "$name" "\\\\tsclient\\$name" "$dir  (until Windows stops)"

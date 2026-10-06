@@ -1,7 +1,10 @@
 /*
- * winapp-xshim: two corrections to how FreeRDP's X11 client (xfreerdp) treats
- * the windows of a single-app (RemoteApp) session. winapp loads it into the
- * client with LD_PRELOAD; nothing else is affected.
+ * winapp-xshim: corrections to how FreeRDP's X11 client (xfreerdp) behaves on
+ * a tiling Wayland desktop. winapp loads it into the client with LD_PRELOAD;
+ * nothing else is affected. There are two: what the client does to Windows'
+ * helper windows, and what it does with the Super key.
+ *
+ * --- Helper windows ---
  *
  * Windows programs keep small helper windows around that the user never
  * sees or touches: the hidden windows of an embedded Internet Explorer
@@ -31,11 +34,28 @@
  * which is what xfreerdp itself first picks for them and which compositors do
  * not focus, and geometry notifications are dropped, since Windows alone
  * decides where such a window is. Ordinary windows are left exactly as they are.
+ *
+ * --- The Super key ---
+ *
+ * On Omarchy every Super shortcut belongs to the desktop: Super+2 changes
+ * workspace, Super+W closes a window. The compositor still hands the Super
+ * press itself to the focused window, xfreerdp forwards it, and when the
+ * shortcut takes the focus away xfreerdp releases it again. Windows sees its
+ * Windows key tapped and opens the Start menu, which is waiting there on the
+ * way back. A Super shortcut the desktop does not use would arrive in Windows
+ * as a bare letter.
+ *
+ * So Super is withheld from the client, together with any key pressed while
+ * it is down, and is never reported as held. WINAPP_SUPER=windows in the
+ * environment turns this off.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <pthread.h>
+#include <stdlib.h>
+#include <string.h>
 #include <X11/Xlib.h>
+#include <X11/keysym.h>
 
 #define MAX_WINDOWS 4096
 
@@ -43,18 +63,21 @@ static Window unmanaged[MAX_WINDOWS]; /* override-redirect windows of this clien
 static int count;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
-static int is_unmanaged(Window window)
+/* Where a window is in the list, or -1. Called with the lock held. */
+static int find(Window window)
 {
-	int found = 0;
-	pthread_mutex_lock(&lock);
 	for (int i = 0; i < count; i++)
 	{
 		if (unmanaged[i] == window)
-		{
-			found = 1;
-			break;
-		}
+			return i;
 	}
+	return -1;
+}
+
+static int is_unmanaged(Window window)
+{
+	pthread_mutex_lock(&lock);
+	const int found = find(window) >= 0;
 	pthread_mutex_unlock(&lock);
 	return found;
 }
@@ -62,15 +85,7 @@ static int is_unmanaged(Window window)
 static void set_unmanaged(Window window, int on)
 {
 	pthread_mutex_lock(&lock);
-	int at = -1;
-	for (int i = 0; i < count; i++)
-	{
-		if (unmanaged[i] == window)
-		{
-			at = i;
-			break;
-		}
-	}
+	const int at = find(window);
 	if (on && at < 0 && count < MAX_WINDOWS)
 		unmanaged[count++] = window;
 	else if (!on && at >= 0)
@@ -85,7 +100,7 @@ int XChangeWindowAttributes(Display* display, Window window, unsigned long mask,
 	if (!real)
 		real = dlsym(RTLD_NEXT, "XChangeWindowAttributes");
 	if ((mask & CWOverrideRedirect) && attributes)
-		set_unmanaged(window, attributes->override_redirect ? 1 : 0);
+		set_unmanaged(window, attributes->override_redirect);
 	return real(display, window, mask, attributes);
 }
 
@@ -105,13 +120,65 @@ int XChangeProperty(Display* display, Window window, Atom property, Atom type, i
 			window_type = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
 		}
 		if (property == window_type && *(const Atom*)data == dialog)
-		{
-			Atom corrected = dropdown_menu;
-			return real(display, window, property, type, format, mode,
-			            (const unsigned char*)&corrected, 1);
-		}
+			data = (const unsigned char*)&dropdown_menu;
 	}
 	return real(display, window, property, type, format, mode, data, nelements);
+}
+
+/* Per key code: its press was withheld, so its release will be too; and its
+ * press went through, so the client holds it down. */
+static unsigned char withheld[256], down[256];
+
+static int keeps_super(void)
+{
+	static int keeps = -1;
+	if (keeps < 0)
+	{
+		const char* wanted = getenv("WINAPP_SUPER");
+		keeps = (wanted && strcmp(wanted, "windows") == 0) ? 0 : 1;
+	}
+	return keeps;
+}
+
+/* True when a key event belongs to the desktop and must not reach Windows. */
+static int belongs_to_desktop(XKeyEvent* key)
+{
+	const unsigned code = key->keycode & 0xff;
+	const KeySym symbol = XLookupKeysym(key, 0);
+	if (symbol == XK_Super_L || symbol == XK_Super_R)
+		return 1;
+	if (key->type == KeyRelease)
+	{
+		const int was = withheld[code];
+		withheld[code] = down[code] = 0;
+		return was;
+	}
+	/* The state says what was held before this press: Mod4 is Super. A key
+	 * that was already down when Super joined it is repeating, and stays
+	 * with Windows so that its release still matches a press there. */
+	if ((key->state & Mod4Mask) && !down[code])
+	{
+		withheld[code] = 1;
+		return 1;
+	}
+	withheld[code] = 0;
+	down[code] = 1;
+	return 0;
+}
+
+/* The client reads the held modifiers here when a window of its gains the
+ * focus, and later releases in Windows whatever it found held. */
+Bool XQueryPointer(Display* display, Window window, Window* root, Window* child, int* root_x,
+                   int* root_y, int* x, int* y, unsigned int* mask)
+{
+	static Bool (*real)(Display*, Window, Window*, Window*, int*, int*, int*, int*,
+	                    unsigned int*);
+	if (!real)
+		real = dlsym(RTLD_NEXT, "XQueryPointer");
+	const Bool rc = real(display, window, root, child, root_x, root_y, x, y, mask);
+	if (mask && keeps_super())
+		*mask &= ~(unsigned int)Mod4Mask;
+	return rc;
 }
 
 int XNextEvent(Display* display, XEvent* event)
@@ -120,12 +187,23 @@ int XNextEvent(Display* display, XEvent* event)
 	if (!real)
 		real = dlsym(RTLD_NEXT, "XNextEvent");
 	int rc = real(display, event);
+	/* An event is never dropped, which would mean waiting here for the next
+	 * one: it is turned into a kind the client has no handler for. */
 	if (event->type == ConfigureNotify &&
 	    (event->xconfigure.override_redirect || is_unmanaged(event->xconfigure.window)))
 	{
-		/* Not dropped, which would mean waiting here for another event: turned
-		 * into a kind the client has no handler for. */
 		event->type = GravityNotify;
+	}
+	else if ((event->type == KeyPress || event->type == KeyRelease) && keeps_super() &&
+	         belongs_to_desktop(&event->xkey))
+	{
+		event->type = GravityNotify;
+	}
+	else if (event->type == FocusOut)
+	{
+		/* the client lets go of every key now, and releases go elsewhere */
+		memset(withheld, 0, sizeof(withheld));
+		memset(down, 0, sizeof(down));
 	}
 	return rc;
 }

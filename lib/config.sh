@@ -4,8 +4,10 @@
 
 CONFIG_FILE=$CONFIG_DIR/config.json
 
-default_config() {
-  cat <<'EOF'
+ensure_config() {
+  [[ -s $CONFIG_FILE ]] && return 0
+  mkdir -p "$CONFIG_DIR"
+  cat >"$CONFIG_FILE" <<'EOF'
 {
   "idleMinutes": 5,
   "shares": [
@@ -14,22 +16,12 @@ default_config() {
   "scale": "auto",
   "windowsSuffix": "auto",
   "helperWindowFix": true,
+  "superKey": "linux",
+  "titleBars": false,
+  "roundedCorners": false,
   "rdpArgs": []
 }
 EOF
-}
-
-ensure_config() {
-  [[ -s $CONFIG_FILE ]] && return 0
-  mkdir -p "$CONFIG_DIR"
-  default_config >"$CONFIG_FILE"
-  # 1.x kept the idle timeout in a file of its own
-  local old=$CONFIG_DIR/idle-minutes minutes
-  if [[ -f $old ]]; then
-    minutes=$(<"$old")
-    [[ $minutes =~ ^[0-9]+$ ]] && cfg_set idleMinutes "$minutes"
-    rm -f "$old"
-  fi
 }
 
 cfg_json() {
@@ -46,16 +38,8 @@ cfg() {
 
 # cfg_edit <jq filter> [jq options...]: rewrite config.json in one step.
 cfg_edit() {
-  local filter=$1 tmp
-  shift
   ensure_config
-  tmp=$(mktemp "$CONFIG_DIR/.config.XXXXXX") || return 1
-  if jq "$@" "$filter" "$CONFIG_FILE" >"$tmp"; then
-    mv -f "$tmp" "$CONFIG_FILE"
-  else
-    rm -f "$tmp"
-    return 1
-  fi
+  json_edit "$CONFIG_FILE" "$@"
 }
 
 # cfg_set <key> <json value>
