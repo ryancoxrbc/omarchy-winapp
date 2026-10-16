@@ -496,6 +496,42 @@ if group "sessions: the next app, and a start that does not wait"; then (
       'hl.dsp.window.move({ workspace = "3", follow = false, window = "address:0x2" })'
   )
 
+  # a client that stops reading what Windows sends (FreeRDP 3.32.2 deadlocks)
+  (
+    STALL_LOOKS=2
+    vm_up >/dev/null 2>&1
+    ss() { printf '0 0 127.0.0.1:1 127.0.0.1:%s users:(("xfreerdp3",pid=4242,fd=19))\n' "$RDP_PORT"
+      printf '512 0 127.0.0.1:2 127.0.0.1:%s users:(("xfreerdp3",pid=%s,fd=19))\n' "$RDP_PORT" "$STUB_PID"; }
+    STUB_PID=7 && is "what a client has left unread is read off its own connection" "$(backlog 7)" 512
+    is "…and a client without one has nothing waiting" "$(backlog 8)" ""
+    unset -f ss
+
+    backlog() { echo 4096; }
+    app_spawn "$TMP/world/stall.log" Word 'C:\Office\WINWORD.EXE' '' >/dev/null 2>&1
+    pid=$RDP_PID && mapfile -t kids < <(pgrep -P "$RDP_PID")
+    app_watch "$TMP/world/stall.log" 'C:\Office\WINWORD.EXE'
+    is "a client that leaves data unread is put down" "$?" 3
+    kill -0 "$pid" 2>/dev/null && fail "…even when it does not answer TERM" || pass
+    has "…and the log says why" "$(cat "$TMP/world/stall.log")" "4096 bytes from Windows unread"
+    ((${#kids[@]})) && kill "${kids[@]}" 2>/dev/null
+
+    REJOIN=1
+    app_spawn "$TMP/world/rejoin.log" Word 'C:\Office\WINWORD.EXE' '"\\tsclient\home\a.docx"' >/dev/null 2>&1
+    REJOIN=0
+    has "the new connection starts the frame program" "$(cat "$STUB_OUT/launch.rdp")" "remoteapplicationprogram:s:$FRAME_EXE"
+    lacks "…alone, so that no second copy of the app opens" "$(cat "$STUB_OUT/launch.rdp")" "remoteapplicationcmdline"
+    has "…and can be asked for the next app" "$(cat "$STUB_OUT/client.args")" "/drive:winappq,$REQUESTS"
+
+    # a busy client that keeps reading is left alone
+    # called in a subshell each time, so it counts its looks in a file
+    backlog() { echo x >>"$STUB_OUT/looks"; (($(wc -l <"$STUB_OUT/looks") % 2)) && echo 4096 || echo 100; }
+    (sleep 7 && kill "$RDP_PID") 2>/dev/null &
+    app_watch "$TMP/world/rejoin.log" 'C:\Office\WINWORD.EXE'
+    is "a client whose backlog shrinks between looks is not stalled" "$?" 0
+    wait
+    exit $failed
+  ); failed=$((failed + $?))
+
   # the console
   is "the changes that were agreed to went along with the first app's job" "$(jq -c .tune "$STUB_OUT/guest.in.json")" '{"fast":true,"trim":true}'
   console_free && fail "a VM that has not said so is taken to sign in on its console" || pass

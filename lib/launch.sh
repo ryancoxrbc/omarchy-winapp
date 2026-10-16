@@ -65,6 +65,25 @@ session_start() { # session_start <exe> <command line>
 
 asked_lately() { [[ -n $(find "$ASKED" -newermt '-20 seconds' 2>/dev/null) ]]; }
 
+# --- a client that stops listening ---------------------------------------------
+# FreeRDP 3.32.2 deadlocks in a RemoteApp session, often within minutes: a
+# thread that draws waits for the X display while the one holding it waits for
+# a lock the first one has. Nothing goes either way from then on. Keys and
+# clicks never reach Windows and the windows keep showing what they last
+# showed, while the app in Windows carries on as if nothing had happened. What
+# Windows sends then piles up unread in the connection, which is what tells it
+# from a quiet session: a working client reads whatever arrives. A client that
+# leaves data unread for this many looks (two seconds apart) is replaced by a
+# new connection to the same session, and its windows come back as they were.
+STALL_LOOKS=${WINAPP_STALL_LOOKS:-10}
+STALLED=0
+REJOIN=0
+
+backlog() { # backlog <client pid>: bytes Windows sent that its client has not read
+  ss -Htnp state established "( dport = :$RDP_PORT )" 2>/dev/null |
+    awk -v me="pid=$1," 'index($0, me) { print $1; exit }'
+}
+
 # --- where windows are -------------------------------------------------------
 # A connection that takes the session over shows every window in it anew, and
 # the desktop puts new windows on the workspace in view. So the windows that
@@ -103,12 +122,17 @@ app_spawn() { # app_spawn <log> <title> <exe> <command line>
   # the session's windows free of Windows' title bar and rounded corners.
   standing_refresh
   FRAMED=0
-  if frame_wanted && frame_usable; then
+  if ((REJOIN)); then
+    # the frame program alone: it serves the session again and starts nothing
+    exe=$FRAME_EXE cmdline=""
+    FRAMED=1
+  elif frame_wanted && frame_usable; then
     cmdline="\"$exe\"${cmdline:+ $cmdline}"
     exe=$FRAME_EXE
     FRAMED=1
   fi
-  places_note
+  # a client that stalled had its windows noted before it was put down
+  ((REJOIN)) || places_note
   # The program and its arguments travel in a connection file: its values are
   # taken literally, while /app:...,cmd:... is a comma-separated list whose
   # parser gives up on a file name with an apostrophe in it.
@@ -157,12 +181,27 @@ app_spawn() { # app_spawn <log> <title> <exe> <command line>
 
 # The RDP session outlives its last app window, so the client never exits by
 # itself: drop the connection once every window it showed has been closed.
-# Returns 0 when the session ran, 2 when the logon has to be retried, and 1
-# with FAILURE set when it never showed anything.
+# Returns 0 when the session ran, 2 when the logon has to be retried, 3 when
+# the client stalled and was put down, and 1 with FAILURE set when it never
+# showed anything.
 app_watch() { # app_watch <log> <exe>
-  local log=$1 exe=$2 seen=$SEEN gone=0 blind=0 n settling=5
+  local log=$1 exe=$2 seen=$SEEN gone=0 blind=0 n settling=5 unread last=0 stuck=0
+  STALLED=0
   while kill -0 "$RDP_PID" 2>/dev/null; do
     sleep 2
+    unread=$(backlog "$RDP_PID")
+    # a working client that is busy can be caught with data waiting, but not
+    # with the same or more waiting every time
+    if ((${unread:-0} > 0 && ${unread:-0} >= last)); then ((++stuck)); else stuck=0; fi
+    last=${unread:-0}
+    if ((stuck >= STALL_LOOKS)); then
+      printf '[winapp] the client has left %s bytes from Windows unread for %s s: reconnecting\n' \
+        "$unread" $((stuck * 2)) >>"$log"
+      places_note
+      STALLED=1
+      kill -KILL "$RDP_PID" 2>/dev/null # a deadlocked client does not answer TERM
+      break
+    fi
     n=$(windows "$RDP_PID") && [[ -n $n ]] || continue
     # windows taken over from an earlier connection come up one by one
     ((settling-- > 0)) && places_restore "$RDP_PID"
@@ -178,6 +217,7 @@ app_watch() { # app_watch <log> <exe>
   wait "$RDP_PID" 2>/dev/null
   rm -f "$RUN_DIR/clients/$RDP_PID"
   RDP_PID=""
+  ((STALLED)) && return 3
   ((seen)) && return 0
 
   case $(rdp_failure "$log") in
@@ -193,7 +233,7 @@ app_watch() { # app_watch <log> <exe>
 
 # launch <kind> <title> <exe> <command line>: the whole life of one app session.
 launch() {
-  local kind=$1 title=$2 exe=$3 cmdline=$4 log rc=0
+  local kind=$1 title=$2 exe=$3 cmdline=$4 log rc=0 rejoins=0
   exe=${exe//\//\\} # the config may use either slash
   desktop_open && die "$DESKTOP_IN_THE_WAY"
   mkdir -p "$RUN_DIR/clients"
@@ -206,6 +246,23 @@ launch() {
     with_lock launch app_spawn "$log" "$title" "$exe" "$cmdline"
     app_watch "$log" "$exe"
     rc=$?
+    # The app is still open in Windows. A new connection shows its windows
+    # again; through the frame program, which starts nothing, so that no
+    # second copy of the app or blank document comes with them.
+    while ((rc == 3)); do
+      rc=0
+      if ((!FRAMED || rejoins++ >= 5)); then
+        notify -u critical "Windows apps" "The connection to Windows stopped responding. Open the app again: its windows come back as they were."
+        break
+      fi
+      notify "Windows apps" "The connection to Windows stopped responding and has been reopened. Anything typed in the last 20 seconds did not reach the app."
+      log=$(new_log "$kind")
+      REJOIN=1
+      with_lock launch app_spawn "$log" "$title" "$exe" ""
+      REJOIN=0
+      app_watch "$log" "$exe"
+      rc=$?
+    done
     if ((rc == 1 && FRAMED)) && [[ $(rdp_failure "$log") == exec ]]; then
       # The frame program is gone from the VM, or Windows will not run it:
       # start apps directly from here on. `winapp setup` puts it back.

@@ -53,6 +53,19 @@ an embedded Internet Explorer control. Update the plugin, then check that
 (`omarchy pkg add gcc`). To get out of a frozen app: `winapp stop`, then open
 it again.
 
+**The app stops reacting while Windows says nothing is wrong: no "Not
+Responding", keys, clicks and Super+W do nothing, and the window keeps an old
+size or shows a popup that will not go.**
+That is the FreeRDP client, not the app: version 3.32.2 deadlocks in RemoteApp
+sessions, often within minutes, and from then on nothing reaches Windows or
+comes back. The app itself carries on in Windows. winapp notices within 20
+seconds, drops the stuck connection and opens a new one to the same session,
+and the windows come back as they were; what was typed in those seconds is
+lost. `pacman -Q freerdp` shows the version. Going back to 3.31.1 avoids it:
+`sudo pacman -U /var/cache/pacman/pkg/freerdp-2:3.31.1-1-x86_64.pkg.tar.zst`
+while it is still in the cache, with `IgnorePkg = freerdp` in
+`/etc/pacman.conf` until a fixed release is out.
+
 **"the Windows desktop is open…"**
 Windows shows either its desktop or single apps, not both at once. Close the
 desktop window (winapp's, or the one Omarchy's own *Windows* launcher opened)

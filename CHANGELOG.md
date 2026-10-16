@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.4.2 - 2026-10-16
+
+### Fixed
+
+- A connection whose FreeRDP client has stopped working is replaced by a new
+  one, and the app's windows come back as they were. FreeRDP 3.32.2 deadlocks
+  in RemoteApp sessions, often within minutes of opening an app: keys and
+  clicks stop reaching Windows and the window keeps its last picture, while
+  the app carries on inside Windows. winapp tells this from a quiet session by
+  data from Windows left unread in the connection, and reconnects after 20
+  seconds of it, through the window-frame program so that no second copy of
+  the app opens. Without the frame program, a notification says to open the
+  app again. Going back to FreeRDP 3.31.1 avoids the deadlock; see
+  [troubleshooting](docs/troubleshooting.md).
+
 ## 2.4.1 - 2026-10-06
 
 ### Fixed
