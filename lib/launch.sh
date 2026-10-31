@@ -1,9 +1,15 @@
 # shellcheck shell=bash
-# Opening things: an app, a file in its app, a program by path, the desktop.
+# Opening things. Windows is shown as one desktop in one window, and
+# everything opens in it: an app, a file in its app, a program by path.
+#
+# One connection, made by `winapp __desktop`, which runs detached so that the
+# desktop outlives whatever asked for it (a file manager, the bar, a
+# terminal). Every later request is a file in a folder that connection
+# redirects (\\tsclient\winappq), which the agent in Windows takes and opens
+# (lib/agent.sh, guest/agent.cs). No second logon, no window of its own.
 
 RDP_PID=""
-SEEN=0
-FAILURE=""
+REQUESTS=$RUN_DIR/requests
 
 # The Windows command line for a list of Linux files: each one translated to
 # its \\tsclient path and quoted.
@@ -17,272 +23,174 @@ win_args() {
   printf '%s' "$out"
 }
 
-# An app opened without a file shows a start screen, and some apps turn that
-# window into the next file opened instead of giving the file a window of its
-# own. For those the catalog names the start screen's title and the arguments
-# that keep it out of this; they start one more copy of the app, so they are
-# used only while such a window is there.
-start_screen_args() { # start_screen_args <id> <exe>
-  local title args
-  IFS=$'\t' read -r title args < <(jq -r --arg id "$1" --arg exe "${2//\//\\}" '
-    .apps[] | select(.id == $id and (.exe | index($exe | split("\\") | last | ascii_downcase)) != null)
-    | .startScreen // empty | "\(.title)\t\(.args)"' "$CATALOG" 2>/dev/null)
-  [[ -n $title && -n $args ]] || return 0
-  hyprctl clients -j 2>/dev/null |
-    jq -e --arg title "$title" "any(.[] | $APP_WINDOWS; .title == \$title)" >/dev/null 2>&1 || return 0
-  printf '%s' "$args"
+# --- the desktop ---------------------------------------------------------------
+
+desktop_pid() { # our desktop client, when one is connected
+  local pid
+  pid=$(cat "$RUN_DIR/desktop.pid" 2>/dev/null)
+  [[ $pid =~ ^[0-9]+$ && $(cat "/proc/$pid/comm" 2>/dev/null) == xfreerdp3 ]] && echo "$pid"
+}
+desktop_ours() { [[ -n $(desktop_pid) ]]; }
+
+# Folders are redirected when a connection is made and cannot be added later.
+# The connection that is open reaches a file when it redirects every folder
+# the request needs, which is what drive_args prints now.
+desktop_reaches() {
+  local pid
+  pid=$(desktop_pid) && [[ -n $pid && $(cat "$RUN_DIR/clients/$pid" 2>/dev/null) == "$(drive_args)" ]]
 }
 
-# --- an app session that is already open ---------------------------------------
-# The frame program in it starts the next app when asked (guest/frame.cs): no
-# second logon, and the windows that are open stay as and where they are. The
-# request is a file in a folder redirected for the purpose. Returns non-zero
-# when no session can take it, and a connection has to be made after all.
-REQUESTS=$RUN_DIR/requests
-ASKED=$RUN_DIR/asked
+OMARCHY_DESKTOP="Windows is open in Omarchy's own window (Omarchy Windows), which cannot be handed files. Close it, then open the file again: it opens in winapp's Windows window"
 
-session_start() { # session_start <exe> <command line>
-  local exe=$1 cmdline=$2 f pid="" request i
-  for f in "$RUN_DIR"/clients/*; do
-    [[ -s $f && $(cat "/proc/${f##*/}/comm" 2>/dev/null) == xfreerdp3 ]] || continue
-    [[ $(cat "$f") == "$(drive_args)" ]] && pid=${f##*/}
-  done
-  [[ -n $pid && -d $REQUESTS ]] || return 1
-  request=$REQUESTS/$$-$RANDOM
-  printf '"%s"%s\n' "$exe" "${cmdline:+ $cmdline}" >"$request.new" || return 1
-  # the session's last window may just have closed: this keeps app_watch from
-  # dropping the connection under the app that is about to open
-  : >"$ASKED"
-  mv "$request.new" "$request.req"
-  for ((i = 0; i < 30; i++)); do
-    [[ -e $request.req ]] || return 0
+# Open the desktop when it is not, and connect it again when the request needs
+# a folder it does not redirect: the session, and every app in it, stays as
+# it is; only the picture of it is drawn anew. Returns once a client is up.
+desktop_ensure() {
+  local pid i
+  desktop_elsewhere && die "$OMARCHY_DESKTOP"
+  desktop_reaches && return 0
+  pid=$(desktop_pid)
+  if [[ -n $pid ]]; then
+    : >"$RUN_DIR/reconnecting"
+    kill "$pid" 2>/dev/null
+    for ((i = 0; i < 50; i++)); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+  fi
+  vm_up "Windows opens when the VM is up."
+  # Windows' copy of the agent and the settings, while nothing is connected
+  standing_refresh
+  commit_drives
+  rm -f "$RUN_DIR/desktop.pid"
+  detached "$SELF" __desktop
+  for ((i = 0; i < 100; i++)); do
+    desktop_ours && return 0
     sleep 0.1
   done
-  mv "$request.req" "$request.gone" 2>/dev/null || return 0 # taken at the last moment
-  rm -f "$request.gone" "$ASKED"
-  return 1
+  die "the Windows window did not open (log: $(cat "$RUN_DIR/desktop.log" 2>/dev/null))"
 }
 
-asked_lately() { [[ -n $(find "$ASKED" -newermt '-20 seconds' 2>/dev/null) ]]; }
-
-# --- a client that stops listening ---------------------------------------------
-# FreeRDP 3.32.2 deadlocks in a RemoteApp session, often within minutes: a
-# thread that draws waits for the X display while the one holding it waits for
-# a lock the first one has. Nothing goes either way from then on. Keys and
-# clicks never reach Windows and the windows keep showing what they last
-# showed, while the app in Windows carries on as if nothing had happened. What
-# Windows sends then piles up unread in the connection, which is what tells it
-# from a quiet session: a working client reads whatever arrives. A client that
-# leaves data unread for this many looks (two seconds apart) is replaced by a
-# new connection to the same session, and its windows come back as they were.
-STALL_LOOKS=${WINAPP_STALL_LOOKS:-10}
-STALLED=0
-REJOIN=0
-
-backlog() { # backlog <client pid>: bytes Windows sent that its client has not read
-  ss -Htnp state established "( dport = :$RDP_PORT )" 2>/dev/null |
-    awk -v me="pid=$1," 'index($0, me) { print $1; exit }'
+# Bring the Windows window forward, switching to its workspace. A client that
+# has only just started has no window yet to focus: wait for it.
+desktop_focus() {
+  local pid i n
+  pid=$(desktop_pid) && [[ -n $pid ]] || return 0
+  for ((i = 0; i < 100; i++)); do
+    n=$(windows "$pid")
+    ((${n:-0} > 0)) && break
+    sleep 0.1
+  done
+  hyprctl dispatch "hl.dsp.focus({ window = \"pid:$pid\" })" >/dev/null 2>&1 ||
+    hyprctl dispatch focuswindow "pid:$pid" >/dev/null 2>&1
+  return 0
 }
 
-# --- where windows are -------------------------------------------------------
-# A connection that takes the session over shows every window in it anew, and
-# the desktop puts new windows on the workspace in view. So the windows that
-# are open are noted before, by title, and put back where they were after.
-PLACES='[]'
-
-places_note() {
-  PLACES='[]'
-  clients_alive || return 0
-  PLACES=$(hyprctl clients -j 2>/dev/null | jq -c "[.[] | $APP_WINDOWS | {title, workspace: .workspace.name}]" 2>/dev/null)
-  [[ -n $PLACES ]] || PLACES='[]'
+# Why the desktop's client ended, in words, or nothing when it is still up.
+desktop_failure() {
+  local log
+  desktop_ours && return 0
+  log=$(cat "$RUN_DIR/desktop.log" 2>/dev/null)
+  case $(rdp_failure "$log") in
+  auth) echo "Windows rejected the sign-in. Check the account in $CREDENTIALS" ;;
+  unreachable) echo "could not reach the Windows VM on $RDP_HOST:$RDP_PORT" ;;
+  bump) echo "Windows is signed in elsewhere and asked whether to take over; answer in its window, or close the other session" ;;
+  *) echo "the Windows window closed (log: $log)" ;;
+  esac
 }
 
-places_restore() { # places_restore <client pid>
-  local address workspace
-  [[ $PLACES != '[]' ]] || return 0
-  while IFS=$'\t' read -r address workspace; do
-    [[ -n $address && $workspace != *[\"\\]* ]] || continue
-    [[ $workspace =~ ^-?[0-9]+$ || $workspace == special:* ]] || workspace=name:$workspace
-    hyprctl dispatch "hl.dsp.window.move({ workspace = \"$workspace\", follow = false, window = \"address:$address\" })" >/dev/null 2>&1 ||
-      hyprctl dispatch movetoworkspacesilent "$workspace,address:$address" >/dev/null 2>&1
-  done < <(hyprctl clients -j 2>/dev/null | jq -r --argjson places "$PLACES" --argjson pid "$1" '
-    [.[] | select(.pid == $pid) | '"$APP_WINDOWS"'] as $now
-    | $places[] | . as $was
-    | first($now[] | select(.title == $was.title)) | select(.workspace.name != $was.workspace)
-    | "\(.address)\t\($was.workspace)"' 2>/dev/null)
-}
-
-# Start the client for one app and return once its session has settled. Runs
-# under the launch lock: a second connection takes over the Windows session,
-# and taking it over before the first has asked for its app would lose that app.
-app_spawn() { # app_spawn <log> <title> <exe> <command line>
-  local log=$1 title=$2 exe=$3 cmdline=$4 file=$RUN_DIR/launch-$$.rdp i n
+# The detached half of desktop_ensure: the client, for as long as it is open.
+cmd___desktop() {
+  local log
   local -a args
-  # Through the frame program when this VM has it: it starts the app and keeps
-  # the session's windows free of Windows' title bar and rounded corners.
-  standing_refresh
-  FRAMED=0
-  if ((REJOIN)); then
-    # the frame program alone: it serves the session again and starts nothing
-    exe=$FRAME_EXE cmdline=""
-    FRAMED=1
-  elif frame_wanted && frame_usable; then
-    cmdline="\"$exe\"${cmdline:+ $cmdline}"
-    exe=$FRAME_EXE
-    FRAMED=1
-  fi
-  # a client that stalled had its windows noted before it was put down
-  ((REJOIN)) || places_note
-  # The program and its arguments travel in a connection file: its values are
-  # taken literally, while /app:...,cmd:... is a comma-separated list whose
-  # parser gives up on a file name with an apostrophe in it.
-  {
-    printf 'remoteapplicationmode:i:1\n'
-    printf 'remoteapplicationprogram:s:%s\n' "$exe"
-    [[ -n $cmdline ]] && printf 'remoteapplicationcmdline:s:%s\n' "$cmdline"
-  } >"$file"
+  rdp_credentials
+  mkdir -p "$RUN_DIR/clients" "$REQUESTS" "$GUEST_DIR"
+  rm -f "$REQUESTS"/*
+  log=$(new_log desktop)
+  echo "$log" >"$RUN_DIR/desktop.log"
   mapfile -t args < <(session_args)
-  if ((FRAMED)); then
-    # where the frame program is asked for the next app (session_start)
-    mkdir -p "$REQUESTS"
-    rm -f "$REQUESTS"/*
-    args+=("/drive:winappq,$REQUESTS")
-  fi
-  if [[ $exe == *[,\'\"]* ]]; then
-    args+=(+workarea -wallpaper) # what /app:program would have switched on
-  else
-    args+=("/app:program:$exe")
-  fi
-  rdp_spawn xfreerdp3 "$log" "$file" "${args[@]}" /wm-class:winapp "/title:$title"
-  # A session that takes requests is recorded with the folders it redirects:
-  # only a file that one of them reaches can be opened in it.
-  if ((FRAMED)); then drive_args >"$RUN_DIR/clients/$RDP_PID"; else : >"$RUN_DIR/clients/$RDP_PID"; fi
-  SEEN=0
-  for ((i = 0; i < 60; i++)); do
-    kill -0 "$RDP_PID" 2>/dev/null || break
-    # When Windows refuses the single-app logon it shows its own "someone else
-    # is signed in" screen in a plain window. That is not an app window.
-    if [[ $(rdp_failure "$log") == bump ]]; then
-      kill "$RDP_PID" 2>/dev/null
-      break
-    fi
-    n=$(windows "$RDP_PID")
-    if [[ ${n:-0} -gt 0 ]]; then
-      sleep 1
-      [[ $(rdp_failure "$log") == bump ]] && continue
-      SEEN=1
-      places_restore "$RDP_PID"
-      break
-    fi
-    sleep 0.5
-  done
-  rm -f "$file"
-}
-
-# The RDP session outlives its last app window, so the client never exits by
-# itself: drop the connection once every window it showed has been closed.
-# Returns 0 when the session ran, 2 when the logon has to be retried, 3 when
-# the client stalled and was put down, and 1 with FAILURE set when it never
-# showed anything.
-app_watch() { # app_watch <log> <exe>
-  local log=$1 exe=$2 seen=$SEEN gone=0 blind=0 n settling=5 unread last=0 stuck=0
-  STALLED=0
-  while kill -0 "$RDP_PID" 2>/dev/null; do
-    sleep 2
-    unread=$(backlog "$RDP_PID")
-    # a working client that is busy can be caught with data waiting, but not
-    # with the same or more waiting every time
-    if ((${unread:-0} > 0 && ${unread:-0} >= last)); then ((++stuck)); else stuck=0; fi
-    last=${unread:-0}
-    if ((stuck >= STALL_LOOKS)); then
-      printf '[winapp] the client has left %s bytes from Windows unread for %s s: reconnecting\n' \
-        "$unread" $((stuck * 2)) >>"$log"
-      places_note
-      STALLED=1
-      kill -KILL "$RDP_PID" 2>/dev/null # a deadlocked client does not answer TERM
-      break
-    fi
-    n=$(windows "$RDP_PID") && [[ -n $n ]] || continue
-    # windows taken over from an earlier connection come up one by one
-    ((settling-- > 0)) && places_restore "$RDP_PID"
-    if ((n > 0)); then
-      seen=1 gone=0
-    elif ((seen)) && ((++gone >= 4)) && ! asked_lately; then
-      kill "$RDP_PID" 2>/dev/null
-    elif ((!seen)) && ((++blind >= 90)); then
-      # three minutes and nothing to show for it
-      kill "$RDP_PID" 2>/dev/null
-    fi
-  done
+  rdp_spawn xfreerdp3 "$log" "" "${args[@]}" "/drive:winappq,$REQUESTS" "/drive:winapp,$GUEST_DIR" \
+    /wm-class:winapp-desktop "/title:Windows" /dynamic-resolution \
+    "/floatbar:sticky:off,default:visible,show:fullscreen"
+  # the folders it redirects, which decide what can be opened in it
+  drive_args >"$RUN_DIR/clients/$RDP_PID"
+  echo "$RDP_PID" >"$RUN_DIR/desktop.pid"
+  rm -f "$RUN_DIR/reconnecting"
   wait "$RDP_PID" 2>/dev/null
   rm -f "$RUN_DIR/clients/$RDP_PID"
+  [[ $(cat "$RUN_DIR/desktop.pid" 2>/dev/null) == "$RDP_PID" ]] && rm -f "$RUN_DIR/desktop.pid"
   RDP_PID=""
-  ((STALLED)) && return 3
-  ((seen)) && return 0
+  # closed to be connected again at once, with another folder
+  [[ -e $RUN_DIR/reconnecting ]] && return 0
+  clients_alive && return 0
+  idle_arm
+  still_open_warning
+}
 
-  case $(rdp_failure "$log") in
-  bump) return 2 ;;
-  replaced) return 0 ;; # a newer launch took the session over; the app lives on there
-  exec) FAILURE="Windows could not start $exe. If the app was moved or removed, run: winapp scan" ;;
-  auth) FAILURE="Windows rejected the sign-in. Check the account in $CREDENTIALS" ;;
-  unreachable) FAILURE="could not reach the Windows VM on $RDP_HOST:$RDP_PORT" ;;
-  *) FAILURE="no window appeared for $exe (log: $log)" ;;
-  esac
+# Closing the window does not close the apps in it, and stopping Windows when
+# idle would lose what they have not saved. The agent keeps a list of their
+# windows in the request folder; what it said last is what was open.
+still_open_warning() {
+  local open minutes
+  minutes=$(idle_minutes)
+  ((minutes > 0)) || return 0
+  open=$(sed '/^[[:space:]]*$/d' "$REQUESTS/open.txt" 2>/dev/null | head -n 6)
+  [[ -n $open ]] || return 0
+  open=${open//\\/\\\\} # notify-send reads backslash escapes and markup
+  open=${open//&/&amp;}
+  open=${open//</&lt;}
+  open=${open//>/&gt;}
+  notify -u critical "Still open in Windows" "$open
+
+These keep running. Windows stops after $minutes idle minutes, and anything not saved is lost then. Open Windows again to get back to them."
+}
+
+# --- requests ------------------------------------------------------------------
+
+# request <open|hidden> <command line> <seconds>: hand the desktop a command
+# line. Taking it is a rename, which only one side can win, so a request that
+# nobody took in time is withdrawn and the caller told.
+request() {
+  local kind=$1 line=$2 seconds=$3 file i
+  mkdir -p "$REQUESTS"
+  file=$REQUESTS/$$-$RANDOM
+  printf '%s\n%s\n' "$kind" "$line" >"$file.new" && mv "$file.new" "$file.req" || return 1
+  for ((i = 0; i < seconds * 10; i++)); do
+    [[ -e $file.req ]] || return 0
+    ((i % 10)) || desktop_ours || break
+    sleep 0.1
+  done
+  mv "$file.req" "$file.gone" 2>/dev/null || return 0 # taken at the last moment
+  rm -f "$file.gone"
   return 1
 }
 
-# launch <kind> <title> <exe> <command line>: the whole life of one app session.
+# launch <exe> <command line>: open a program, with its arguments, in Windows.
 launch() {
-  local kind=$1 title=$2 exe=$3 cmdline=$4 log rc=0 rejoins=0
-  exe=${exe//\//\\} # the config may use either slash
-  desktop_open && die "$DESKTOP_IN_THE_WAY"
-  mkdir -p "$RUN_DIR/clients"
+  local line="\"${1//\//\\}\"${2:+ $2}"
   changes_ask
-  if with_lock launch session_start "$exe" "$cmdline"; then return 0; fi
-  for _ in 1 2 3; do
-    vm_up "The app opens when the VM is up."
-    commit_drives
-    log=$(new_log "$kind")
-    with_lock launch app_spawn "$log" "$title" "$exe" "$cmdline"
-    app_watch "$log" "$exe"
-    rc=$?
-    # The app is still open in Windows. A new connection shows its windows
-    # again; through the frame program, which starts nothing, so that no
-    # second copy of the app or blank document comes with them.
-    while ((rc == 3)); do
-      rc=0
-      if ((!FRAMED || rejoins++ >= 5)); then
-        notify -u critical "Windows apps" "The connection to Windows stopped responding. Open the app again: its windows come back as they were."
-        break
-      fi
-      notify "Windows apps" "The connection to Windows stopped responding and has been reopened. Anything typed in the last 20 seconds did not reach the app."
-      log=$(new_log "$kind")
-      REJOIN=1
-      with_lock launch app_spawn "$log" "$title" "$exe" ""
-      REJOIN=0
-      app_watch "$log" "$exe"
-      rc=$?
-    done
-    if ((rc == 1 && FRAMED)) && [[ $(rdp_failure "$log") == exec ]]; then
-      # The frame program is gone from the VM, or Windows will not run it:
-      # start apps directly from here on. `winapp setup` puts it back.
-      frame_record false
-      continue
-    fi
-    ((rc == 2)) || break
-    # Someone is signed in on the console after all, or Windows was restarted
-    # behind our back: claim its session and retry.
-    console_taken
-    FAILURE="Windows would not start a single-app session (log: $log)"
-    desktop_open && FAILURE=$DESKTOP_IN_THE_WAY
-  done
-  # whatever happened, an unused VM must not be left running for good
-  clients_alive || idle_arm
-  ((rc == 0)) || die "$FAILURE"
+  with_lock launch launch_locked "$line"
+}
+
+launch_locked() {
+  local line=$1 seconds=10
+  # a desktop that is only now signing in takes a while to start the agent
+  desktop_reaches || seconds=120
+  desktop_ensure
+  desktop_focus
+  if ! agent_usable; then
+    die "Windows is open, but winapp's agent could not be set up in it, so nothing can be opened from Linux. See: winapp doctor --deep"
+  fi
+  if request open "$line" "$seconds"; then
+    desktop_focus
+    return 0
+  fi
+  desktop_ours || die "$(desktop_failure)"
+  die "Windows did not pick up the request. If it is still signing in, try again in a moment; otherwise see: winapp doctor --deep"
 }
 
 launch_cleanup() {
-  rm -f "$DRIVES_PENDING" "$RUN_DIR/launch-$$.rdp" "$REQUESTS/$$"-*
+  rm -f "$DRIVES_PENDING" "$REQUESTS/$$"-*
   [[ $(cat "$RUN_DIR/starting" 2>/dev/null) == "$$" ]] && rm -f "$RUN_DIR/starting"
   [[ -n $RDP_PID ]] || return 0
   kill "$RDP_PID" 2>/dev/null
@@ -292,15 +200,13 @@ launch_cleanup() {
 # --- commands ----------------------------------------------------------------
 
 cmd_app() { # winapp <app> [file...]
-  local id=$1 exe title fixed files own
+  local id=$1 exe fixed files
   shift
   exe=$(app_field "$id" exe)
   [[ -n $exe ]] || die "no app called '$id' (see: winapp apps, winapp help)"
-  title=$(app_field "$id" name)
   fixed=$(app_field "$id" args)
   files=$(win_args "$@") || exit 1
-  [[ -n $files ]] && own=$(start_screen_args "$id" "$exe") && files="${own:+$own }$files"
-  launch "$id" "${title:-$id}" "$exe" "$fixed${fixed:+${files:+ }}$files"
+  launch "$exe" "$fixed${fixed:+${files:+ }}$files"
 }
 
 cmd_run() { # winapp run <program> [file...]
@@ -312,14 +218,14 @@ cmd_run() { # winapp run <program> [file...]
     w=$(win_path "$p") || exit 1
     files=$(win_args "$@") || exit 1
     case ${p,,} in
-    *.msi) launch run "$(basename -- "$p")" 'C:\Windows\System32\msiexec.exe' "/i \"$w\"" ;;
-    *.exe) launch run "$(basename -- "$p" .exe)" "$w" "$files" ;;
+    *.msi) launch 'C:\Windows\System32\msiexec.exe' "/i \"$w\"" ;;
+    *.exe) launch "$w" "$files" ;;
     *) die "$target is not a Windows program; to open it with its Windows app use: winapp open" ;;
     esac
     return
   fi
   files=$(win_args "$@") || exit 1
-  launch run "$(basename -- "${target//\\//}" .exe)" "$target" "$files"
+  launch "$target" "$files"
 }
 
 cmd_open() { # winapp open <file>: whatever Windows opens that file type with
@@ -327,7 +233,7 @@ cmd_open() { # winapp open <file>: whatever Windows opens that file type with
   [[ -n ${1:-} ]] || die "usage: winapp open <file>"
   p=$(local_path "$1") || die "no such file: $1"
   w=$(win_path "$p") || exit 1
-  launch open "$(basename -- "$p")" 'C:\Windows\System32\rundll32.exe' "url.dll,FileProtocolHandler $w"
+  launch 'C:\Windows\System32\rundll32.exe' "url.dll,FileProtocolHandler $w"
 }
 
 cmd_explorer() { # winapp explorer [folder]: the first shared folder when none is given
@@ -336,28 +242,12 @@ cmd_explorer() { # winapp explorer [folder]: the first shared folder when none i
   [[ -n ${1:-$first} ]] || die "no folder is shared yet; name one (winapp explorer <folder>) or choose some: winapp share pick"
   p=$(local_path "${1:-$first}") && [[ -d $p ]] || die "no such folder: ${1:-$first}"
   w=$(win_path "$p") || exit 1
-  launch explorer "Windows Explorer" 'C:\Windows\explorer.exe' "\"$w\""
+  launch 'C:\Windows\explorer.exe' "\"$w\""
 }
 
-# The whole Windows desktop in a window, with the same folders redirected: the
-# place to install programs. Unlike Omarchy's own launcher it leaves the VM
-# running when closed, on the idle timer, ready for the app you just installed.
+# The Windows window itself: opened when it is not, brought forward when it is.
 cmd_desktop() {
-  local log
-  local -a args
-  desktop_open && die "the Windows desktop is already open"
-  clients_alive && die "Windows apps are open, and Windows shows either its desktop or single apps, not both. Close the apps first"
-  vm_up "The desktop opens when the VM is up."
-  commit_drives
-  mkdir -p "$RUN_DIR/clients"
-  log=$(new_log desktop)
-  mapfile -t args < <(session_args)
-  rdp_spawn xfreerdp3 "$log" "" "${args[@]}" /wm-class:winapp-desktop "/title:Windows" \
-    /dynamic-resolution "/floatbar:sticky:off,default:visible,show:fullscreen"
-  : >"$RUN_DIR/clients/$RDP_PID"
-  echo "$RDP_PID" >"$RUN_DIR/desktop.pid"
-  wait "$RDP_PID" 2>/dev/null
-  rm -f "$RUN_DIR/clients/$RDP_PID" "$RUN_DIR/desktop.pid"
-  RDP_PID=""
-  clients_alive || idle_arm
+  changes_ask
+  with_lock launch desktop_ensure
+  desktop_focus
 }

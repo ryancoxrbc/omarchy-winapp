@@ -7,8 +7,8 @@ import qs.Commons
 import qs.Ui
 
 // Bar widget for the Windows VM behind the bundled `winapp` command. The icon
-// is dim while the VM is off; the panel opens Windows apps (booting the VM
-// first when needed), switches the VM on and off, and sets whether Windows is
+// is dim while the VM is off; the panel opens Windows apps in the Windows
+// window (booting the VM first when needed), switches the VM on and off, and sets whether Windows is
 // kept on from login (warm) or started for an app and stopped when idle (cold). Everything it shows comes from
 // `winapp state`, and everything it does is a `winapp` command.
 Panel {
@@ -203,7 +203,7 @@ Panel {
     if (JSON.stringify(parsed.apps || []) !== JSON.stringify(apps)) apps = parsed.apps || []
     if (pending === "start" && vm !== "stopped") pending = ""
     if (pending === "stop" && vm !== "running") pending = ""
-    if (vm !== "running" || windows === 0) confirmStop = false
+    if (vm !== "running") confirmStop = false
     tick()
   }
 
@@ -224,8 +224,7 @@ Panel {
     if (vm === "stopping" || pending === "stop") return "Shutting down…"
     if (off) return "Off"
     if (vm !== "running") return "Starting…"
-    if (desktop) return "Desktop open"
-    if (windows > 0) return windows + (windows === 1 ? " window open" : " windows open")
+    if (desktop) return "Open"
     if (idleDeadline > 0) return "Idle · stops in " + countdown()
     if (mode === "warm") return "On · kept ready"
     if (idleMinutes === 0) return "On · stays on until stopped"
@@ -295,12 +294,13 @@ Panel {
     run(["stop"])
   }
 
-  // Stopping with apps open would take unsaved work with it: ask first, in
-  // the panel, which a keybinding may have to open for the question to be seen.
+  // Apps in Windows keep running when its window is closed, so stopping
+  // could take unsaved work with it: ask first, in the panel, which a
+  // keybinding may have to open for the question to be seen.
   function togglePower() {
     if (busy) return
     if (off) startVm()
-    else if (windows > 0 && !confirmStop) {
+    else if (vm === "running" && !confirmStop) {
       if (!opened) open()
       confirmStop = true
       setCursor("stopCancel")
@@ -523,8 +523,8 @@ Panel {
             Text {
               textFormat: Text.PlainText
               width: parent.width
-              text: (win.windows === 1 ? "A Windows app is" : win.windows + " Windows app windows are")
-                + " still open. Stopping now discards anything not saved."
+              text: "Apps in Windows keep running when its window is closed."
+                + " Stopping now discards anything not saved in them."
               color: win.urgent
               font.family: win.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -570,7 +570,7 @@ Panel {
             Text {
               textFormat: Text.PlainText
               width: parent.width
-              text: "Omarchy can run Windows in a virtual machine. Once it is installed, its apps open here as ordinary windows, on your Linux files."
+              text: "Omarchy can run Windows in a virtual machine. Once it is installed, Windows opens here in a window, and your Linux files open in its apps."
               color: win.dim
               font.family: win.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -641,8 +641,8 @@ Panel {
                 width: parent.width
                 kind: "desktop"
                 glyph: win.glyphDesktop
-                title: "Windows desktop"
-                subtitle: win.desktop ? "Open now; close it to use single apps" : "Install programs, change settings"
+                title: "Windows"
+                subtitle: win.desktop ? "Open: bring it forward" : "The desktop, where apps and files open"
                 onActivated: win.openDesktop()
               }
 

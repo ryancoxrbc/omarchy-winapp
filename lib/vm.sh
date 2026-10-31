@@ -107,11 +107,10 @@ clients_kill() {
   done
 }
 
-# Titled windows of our RDP clients that are real app windows (FreeRDP also
-# maps an off-screen "RemoteApp Marker Window").
-APP_WINDOWS='select((.class == "winapp" or .class == "winapp-desktop") and .title != "" and .title != "RemoteApp Marker Window")'
+# The Windows window (winapp's desktop client), when it is on screen.
+APP_WINDOWS='select(.class == "winapp-desktop" and .title != "")'
 
-windows() { # windows [pid]: how many app windows are on screen (of one client)
+windows() { # windows [pid]: how many Windows windows are on screen (of one client)
   local filter=.
   [[ -n ${1:-} ]] && filter="select(.pid == $1)"
   hyprctl clients -j 2>/dev/null | jq "[.[] | $filter | $APP_WINDOWS] | length" 2>/dev/null
@@ -189,25 +188,15 @@ primed() {
 }
 
 # --- the desktop -------------------------------------------------------------
-# Windows on a desktop edition shows one session at a time: either the desktop
-# or the session single apps run in. Whichever is connected, a logon to the
-# other is refused (or, for the desktop, answered with a "someone else is
-# signed in" prompt). So the two are kept apart here, with a message that says
-# so, instead of failing in the middle of a launch.
-
-# Omarchy's own "Windows" launcher holding the desktop open. A logon of ours
-# would take its session away, which that launcher answers by shutting the VM
-# down. (Its client names the server on its command line; ours are given
-# theirs over stdin.)
+# Windows on a desktop edition shows one session at a time. Omarchy's own
+# "Omarchy Windows" launcher connects to the same desktop winapp does, but
+# without the folder winapp hands files through, and it shuts the VM down
+# when its session is taken away. So winapp leaves it alone and says so.
+# (Its client names the server on its command line; ours are given theirs
+# over stdin.)
 desktop_elsewhere() { pgrep -f "xfreerdp3 .*/v:$RDP_HOST:$RDP_PORT" >/dev/null 2>&1; }
 
-desktop_open() { # ours (`winapp desktop`), or that launcher's
-  local pid
-  pid=$(cat "$RUN_DIR/desktop.pid" 2>/dev/null)
-  [[ $pid =~ ^[0-9]+$ && $(cat "/proc/$pid/comm" 2>/dev/null) == xfreerdp3 ]] || desktop_elsewhere
-}
-
-DESKTOP_IN_THE_WAY="the Windows desktop is open, and Windows shows either its desktop or single apps, not both. Close the desktop window first"
+desktop_open() { desktop_ours || desktop_elsewhere; } # ours, or that launcher's
 
 prime_once() { # prime_once <log>
   local log=$1 i ok=1
@@ -266,7 +255,7 @@ wait_guest() { # wait_guest <log>
   return 1
 }
 
-# Start the VM if needed and return once a RemoteApp logon will work.
+# Start the VM if needed and return once a logon will work.
 vm_up() { # vm_up [what to tell the user while it boots]
   vm_installed || die "the Windows VM is not set up yet; run: omarchy-windows-vm install"
   [[ -e $COMPOSE ]] || die "the Windows VM uses Omarchy's old layout; open Windows once from the app launcher to migrate it"
@@ -416,7 +405,7 @@ cmd_status() {
   elif desktop_open; then
     say "Windows VM running, desktop open"
   else
-    say "Windows VM running, $(windows) app window(s), $(if warm; then echo "kept on (warm)"; else echo "idle shutdown after $(idle_minutes) min"; fi)"
+    say "Windows VM running, window closed, $(if warm; then echo "kept on (warm)"; else echo "idle shutdown after $(idle_minutes) min"; fi)"
   fi
 }
 

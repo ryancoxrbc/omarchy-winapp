@@ -1,5 +1,38 @@
 # Changelog
 
+## 3.0.0 - unreleased
+
+### Changed
+
+- Windows is one window: its desktop, with its taskbar, the way it looks on a
+  PC. Every app and every file opens in it. Double-click a `.docx` and Word
+  opens it there, and the window comes forward; with the window open that
+  takes under a second. 2.x showed each app in a window of its own
+  (RemoteApp), and with it every menu, tooltip and dialog; the freezes,
+  tiling popups, FreeRDP deadlocks and windows that moved between connections
+  all came from that, and none of it arises inside one desktop.
+- *Windows* in the app launcher is winapp's window. Omarchy's own entry stays,
+  renamed **Omarchy Windows**; `winapp uninstall` gives it its name back.
+- Closing the window does not close the apps in it. When it closes with apps
+  still open, a notification names them and says when the idle timer will
+  stop Windows, and stopping from the panel always asks first.
+- A program inside Windows, `winapp-agent.exe`, opens what winapp asks for,
+  started by a scheduled task at every sign-in and connection. It replaces
+  `winapp-frame.exe`, which `winapp setup` removes.
+- `winapp scan`, `manage`, `icons` and `doctor --deep` work while the window
+  is open; their jobs run in it, hidden.
+- A file outside the shared folders makes the window connect again with its
+  folder added; the apps in it stay open.
+
+### Removed
+
+- The settings `helperWindowFix`, `titleBars` and `roundedCorners`, and
+  `titleBar` on an app, together with what they controlled: there are no
+  app windows of their own to correct or trim. Left in `config.json`, they
+  are ignored.
+- The reconnect-on-stall watchdog of 2.4.2 and the start-screen handling of
+  2.4.1, both specific to windows per app.
+
 ## 2.4.2 - 2026-10-16
 
 ### Fixed

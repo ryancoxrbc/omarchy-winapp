@@ -18,6 +18,9 @@ MIME_DIR=$DATA_HOME/mime
 MIMEAPPS=${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list
 FALLBACK_ICON=application-x-executable
 MENU_STAMP=$CACHE_DIR/menu.stamp
+# Omarchy's own launcher entry for the VM, which winapp's "Windows" replaces
+OMARCHY_ENTRY=$APP_DIR/windows-vm.desktop
+OMARCHY_NAME="Omarchy Windows"
 COMMANDS='run|open|explorer|desktop|apps|scan|add|remove|manage|icons|sync|start|stop|mode|idle|resources|status|state|shares|share|changes|setup|doctor|uninstall|logs|version|help'
 
 ensure_apps() {
@@ -191,12 +194,11 @@ sync_desktop() {
       echo "[Desktop Entry]"
       echo "Type=Application"
       echo "Name=$shown"
-      echo "Comment=Windows app; opens Linux files in place"
+      echo "Comment=Windows app; opens Linux files in place, in the Windows window"
       echo "Exec=$bin $id %F"
       echo "Icon=${icon:-$FALLBACK_ICON}"
       echo "Terminal=false"
       echo "Categories=${categories:-Utility;}"
-      echo "StartupWMClass=winapp"
       # out of the launcher, but still there to open its file types with
       [[ $(app_field "$id" menu) == false || $(app_field "$id" desktop) == false ]] && echo "NoDisplay=true"
       [[ -n $mimes ]] && echo "MimeType=$(tr '\n' ';' <<<"$mimes")"
@@ -217,6 +219,9 @@ sync_desktop() {
     fi
   done < <(app_ids)
 
+  windows_entry
+  keep+=(winapp-desktop.desktop)
+
   for f in "$APP_DIR"/winapp-*.desktop; do
     [[ -e $f && " ${keep[*]} " != *" ${f##*/} "* ]] || continue
     rm -f "$f"
@@ -232,6 +237,37 @@ sync_desktop() {
   update-desktop-database "$APP_DIR" >/dev/null 2>&1
   mkdir -p "$CACHE_DIR"
   menu_fingerprint >"$MENU_STAMP"
+  return 0
+}
+
+# The Windows window gets the name, and the icon, Omarchy's own launcher had:
+# it is where Windows is now. Omarchy's entry stays, renamed, for its own way
+# of showing Windows (which stops the VM when its window closes). Omarchy
+# writes that entry again whenever the VM is reinstalled; the bar's regular
+# check notices (menu_stale) and renames it again.
+windows_entry() {
+  local icon
+  icon=$(sed -n 's/^Icon=//p' "$OMARCHY_ENTRY" 2>/dev/null | head -n1)
+  {
+    echo "[Desktop Entry]"
+    echo "Type=Application"
+    echo "Name=Windows"
+    echo "Comment=The Windows VM's desktop, where Windows apps and files open"
+    echo "Exec=$(exec_word) desktop"
+    echo "Icon=${icon:-windows}"
+    echo "Terminal=false"
+    echo "Categories=System;Virtualization;"
+    echo "StartupWMClass=winapp-desktop"
+  } >"$APP_DIR/winapp-desktop.desktop"
+  if grep -qx 'Name=Windows' "$OMARCHY_ENTRY" 2>/dev/null; then
+    sed -i "s/^Name=Windows\$/Name=$OMARCHY_NAME/" "$OMARCHY_ENTRY"
+  fi
+}
+
+# On uninstall: Omarchy's entry gets its own name back.
+windows_entry_restore() {
+  grep -qx "Name=$OMARCHY_NAME" "$OMARCHY_ENTRY" 2>/dev/null &&
+    sed -i "s/^Name=$OMARCHY_NAME\$/Name=Windows/" "$OMARCHY_ENTRY"
   return 0
 }
 
@@ -293,10 +329,6 @@ installed() { # installed [all]
 guest_refresh() { # guest_refresh <id>...
   local ids=("$@") job documents="" id note=""
   ((${#ids[@]})) || return 0
-  if clients_alive; then
-    warn "icons were not fetched because Windows is in use; run 'winapp icons' later"
-    return 0
-  fi
   # Office's default save folder, when the Documents folder is shared
   documents=$(xdg-user-dir DOCUMENTS 2>/dev/null)
   if [[ -d $documents && -n $(covering_drive "$documents") ]]; then
@@ -455,7 +487,6 @@ cmd_icons() { # fetch icons again, for every app or the ones named
   local ids=("$@")
   ((${#ids[@]})) || mapfile -t ids < <(app_ids)
   ((${#ids[@]})) || die "no apps yet"
-  clients_alive && die "$SESSION_IN_USE"
   guest_refresh "${ids[@]}"
   sync_desktop
 }
@@ -471,7 +502,6 @@ cmd_manage() {
   local list line id was picked="" chosen=() add=() drop=() selected=() labels=() take=yes
   local -A id_of=()
   have gum || die "winapp manage needs gum (omarchy pkg add gum). Without it: winapp scan, then winapp add <id>"
-  clients_alive && die "$SESSION_IN_USE"
   say "Looking at what is installed in Windows…"
   scan_guest || die "$GUEST_ERROR"
   list=$(installed | jq -r '.[] | [.id, (.name + (if (.ext | length) > 0 then "  (" + (.ext | map("." + .) | .[0:4] | join(" ")) + ")" else "" end) | gsub(","; " ")),

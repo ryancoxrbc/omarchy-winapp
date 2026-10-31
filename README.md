@@ -1,7 +1,7 @@
 <h1 align="center">Windows Apps for Omarchy</h1>
 
 <p align="center">
-  Word, CorelDRAW, SOLIDWORKS or any other Windows program as an ordinary window on your Omarchy desktop,<br>
+  Word, CorelDRAW, SOLIDWORKS or any other Windows program, one double-click away on your Omarchy desktop,<br>
   opening and saving your Linux files where they are.
 </p>
 
@@ -12,19 +12,22 @@
 Omarchy can already run Windows in a virtual machine (Install > Windows). This
 plugin turns that VM into a source of apps:
 
-- **Apps as windows.** Each Windows program opens in its own window that tiles,
-  floats and switches like any other. No Windows desktop around it, no Windows
-  title bar on top of it, square corners, and the Super key stays Omarchy's.
+- **Windows in one window.** Windows is a single window on your desktop that
+  tiles, floats and switches like any other, with its own desktop and taskbar
+  inside. Its menus and dialogs stay inside it, where Windows draws them, and
+  the Super key stays Omarchy's.
 - **Your files, in place.** Double-click a `.docx`, `.cdr` or `.sldprt` in the
-  file manager and it opens in the Windows app. Save, and the Linux file is
-  updated. Nothing is copied into the VM and there is no sync folder.
+  file manager and it opens in the Windows app, in that window, which comes
+  forward. Save, and the Linux file is updated. Nothing is copied into the VM
+  and there is no sync folder.
 - **Any program you install.** Install software from the Windows desktop, then
   tick it in a checklist. It gets a launcher entry, its real icon and its file
   types. Around 40 common programs are recognised by name; everything else
   works too.
-- **The VM looks after itself.** It boots when you open an app (about 15
-  seconds cold, 3 seconds once it is up, under a second for the next app) and shuts down a few minutes after you
-  close the last one, so it is not holding memory while you are not using it.
+- **The VM looks after itself.** It boots when you open an app or a file
+  (about 15 seconds cold; under a second once the window is open) and shuts
+  down a few minutes after you close its window, so it is not holding memory
+  while you are not using it.
 - **A bar widget** shows whether Windows is running and what it is doing, opens
   apps, and starts or stops the VM.
 
@@ -49,12 +52,13 @@ missing.
 
 Say you want CorelDRAW.
 
-1. **Install it in Windows.** Open the panel and choose *Windows desktop* (or
-   run `winapp desktop`). The folders you share are there under *This PC*.
+1. **Install it in Windows.** Open *Windows* from the app launcher or the
+   panel (or run `winapp desktop`). The folders you share are there under
+   *This PC*.
    An installer can also be started from Linux directly, wherever it is:
    `winapp run ~/Downloads/CorelDRAW-Setup.exe`.
-2. **Tick it.** Close the desktop window, choose *Add or remove apps* in the
-   panel (or run `winapp manage`), tick CorelDRAW, press Enter.
+2. **Tick it.** Choose *Add or remove apps* in the panel (or run `winapp
+   manage`), tick CorelDRAW, press Enter.
 
 That is all. CorelDRAW is now in the app launcher and the panel, with its own
 icon, and `.cdr` files open in it.
@@ -127,6 +131,16 @@ real programs. The two get along:
 Set `"windowsSuffix"` to `"always"` or `"never"` in the settings if you would
 rather have the suffix everywhere or nowhere.
 
+## Next to Omarchy's own Windows launcher
+
+Omarchy's *Windows* entry in the app launcher opens the same VM's desktop. When
+winapp is set up, *Windows* in the launcher is winapp's, and Omarchy's is still
+there as **Omarchy Windows**. The difference: winapp's window is where files
+from Linux open, and closing it leaves Windows running on the idle timer;
+Omarchy's cannot be handed files and shuts the VM down when it closes. While
+Omarchy's is open, winapp asks you to close it before opening a file.
+`winapp uninstall` gives Omarchy's entry its name back.
+
 ## The panel
 
 Click the Windows icon in the bar, or bind a key to
@@ -134,18 +148,18 @@ Click the Windows icon in the bar, or bind a key to
 
 | | |
 |---|---|
-| The switch | Start or stop the VM. Stopping with apps open asks first. |
-| An app | Open it. Boots Windows first if needed. |
-| Windows desktop | The full desktop, for installing programs and changing settings. |
+| The switch | Start or stop the VM. Stopping asks first: apps in Windows keep running when its window is closed. |
+| An app | Open it in the Windows window. Boots Windows first if needed. |
+| Windows | The Windows window: opens it, or brings it forward. |
 | Add or remove apps | The checklist of installed programs. |
 | Memory and processors | How much of this computer Windows gets. |
 | Shared folders | Tick the folders Windows apps can open and save in. |
 | Changes to Windows | Shown while winapp has a question for you about an optional change inside Windows. `winapp changes` lists them all at any time. |
-| Stop when idle for | Cold only: how long the VM stays up after the last app closes. |
-| Start-up | **Cold**: Windows starts when you open an app (about 15 seconds) and stops when idle, so it uses no memory in between. **Warm**: Windows starts when you log in and stays on, so every app opens in about 3 seconds; it holds its memory (16 GB, say) all the time, in use or not. |
+| Stop when idle for | Cold only: how long the VM stays up after the Windows window closes. |
+| Start-up | **Cold**: Windows starts when you open an app (about 15 seconds) and stops when idle, so it uses no memory in between. **Warm**: Windows starts when you log in and stays on, so the window opens in a few seconds; it holds its memory (16 GB, say) all the time, in use or not. |
 
 Keyboard: `↑` `↓` or `j` `k` to move, `Enter` to activate, `←` `→` on the idle
-row, `d` for the desktop, `a` to add apps, `m` for memory and processors, `r` to
+row, `d` for the Windows window, `a` to add apps, `m` for memory and processors, `r` to
 refresh, `Esc` to close.
 
 The icon can be hidden while Windows is off, in Setup > Plugins or with
@@ -162,7 +176,7 @@ winapp resources --ram 8 --cores 4   # either option alone works too
 ```
 
 This rewrites the VM's configuration through Omarchy's own helper, so it asks
-for your password once. Windows apps have to be closed, and the new values
+for your password once. The new values
 apply the next time Windows starts. The disk and everything on it are left
 exactly as they are.
 
@@ -178,11 +192,11 @@ sitting idle. That is Omarchy's own prompt, and the plugin leaves it alone.
 ## Commands
 
 ```
-winapp <app> [file...]       open an app, optionally on files
+winapp <app> [file...]       open an app in the Windows window, optionally on files
 winapp open <file>           open a file with whatever Windows uses for it
 winapp run <program> [file]  run a program by Windows path, or a Linux-side .exe/.msi
 winapp explorer [folder]     browse a Linux folder in Windows Explorer
-winapp desktop               the whole Windows desktop
+winapp desktop               open the Windows window, or bring it forward
 
 winapp manage                tick the installed programs you want
 winapp scan [text]           list what is installed in Windows
@@ -206,28 +220,24 @@ winapp setup | doctor [--deep] | logs | uninstall
 
 | Key | Default | Meaning |
 |---|---|---|
-| `mode` | `"cold"` | `"cold"` starts Windows when an app is opened and stops it when idle. `"warm"` starts it when you log in (the bar widget does that) and keeps it on: apps open in a few seconds, and the VM's memory stays in use. |
-| `idleMinutes` | `5` | Stop the VM this long after the last app window closes. `0` never does. |
+| `mode` | `"cold"` | `"cold"` starts Windows when an app is opened and stops it when idle. `"warm"` starts it when you log in (the bar widget does that) and keeps it on: the window opens in a few seconds, and the VM's memory stays in use. |
+| `idleMinutes` | `5` | Stop the VM this long after the Windows window closes. `0` never does. Apps left open in Windows are stopped with it. |
 | `shares` | none | Folders redirected into Windows; choose them with `winapp share pick`. |
 | `scale` | `"auto"` | `"auto"` follows the focused monitor; or a percentage such as `150`. |
 | `pointerScale` | `"auto"` | What Windows' mouse pointer is reduced by on a scaled monitor: `"auto"` is the focused monitor's scale; or a percentage, `100` for none. |
 | `windowsSuffix` | `"auto"` | Add " (Windows)" to a launcher name: `"auto"` only when another app has the same name, `"always"`, or `"never"`. |
-| `helperWindowFix` | `true` | Keeps programs such as CorelDRAW from freezing; see [how it works](docs/how-it-works.md#the-helper-window-fix). |
 | `superKey` | `"linux"` | `"linux"` keeps the Super key for Omarchy's shortcuts, so Windows' Start menu does not open when you switch workspace. `"windows"` passes it to Windows. |
-| `titleBars` | `false` | `true` keeps the title bar Windows draws on app windows; see [window frames](docs/how-it-works.md#window-frames). |
-| `roundedCorners` | `false` | `true` keeps Windows 11's rounded window corners. |
-| `fastStart` | not set | Your answer to "Start Windows faster?": `true` switches off Windows' sign-in on the VM's own console, so the first app does not wait half a minute for it; `false` leaves or restores it; not set means you have not been asked yet. See [what is changed in Windows](docs/how-it-works.md#what-is-changed-in-windows). |
+| `fastStart` | not set | Your answer to "Start Windows faster?": `true` switches off Windows' sign-in on the VM's own console, so a cold start does not wait half a minute for it; `false` leaves or restores it; not set means you have not been asked yet. See [what is changed in Windows](docs/how-it-works.md#what-is-changed-in-windows). |
 | `trimWindows` | not set | Your answer to switching off Windows' search indexer and Widgets, in the same three states. |
-| `rdpArgs` | `[]` | Extra FreeRDP arguments for every session, for example `["/microphone"]` or `["/kbd:layout:0x0407"]`. |
+| `rdpArgs` | `[]` | Extra FreeRDP arguments for the Windows window, for example `["/microphone"]` or `["/kbd:layout:0x0407"]`. |
 
 `~/.config/winapp/apps.json` is the app list. It can be edited by hand; run
 `winapp sync` afterwards to rebuild the launcher entries. Each app has an `id`,
 `name` and `exe`, and optionally `args`, `icon`, `ext` (file types that are its
 own), `opens` (types it can also open), `default` (`true`: always the default
 app for its own types; `false`: never; unset: only for types nothing on Linux
-opens), `panel` / `menu` set to `false` to hide it there (hidden from the launcher, it
-still opens its file types), and `titleBar` set to `true` to keep Windows'
-title bar on that app.
+opens), and `panel` / `menu` set to `false` to hide it there (hidden from the
+launcher, it still opens its file types).
 
 ## When something is wrong
 
@@ -248,17 +258,12 @@ winapp logs            # the latest session log
   whole home folder with its keys and browser profiles.
 - **Your say.** winapp changes nothing optional inside Windows without asking.
   `winapp changes` lists everything it does there.
-- **One app session.** All Windows apps share one Windows session. Opening a
-  second app moves the first one's windows across to a new connection; they
-  blink once and carry on.
-- **Desktop or apps, not both.** A desktop edition of Windows shows one session
-  at a time, so the full desktop and single apps cannot be open together.
-  winapp says so when you try; close the one to use the other. (The same goes
-  for Omarchy's own *Windows* launcher, which additionally shuts the VM down
-  when its window closes. `winapp desktop` does not.)
-- **Housekeeping needs the session.** `winapp scan`, `manage` and `icons` need
-  that session to themselves and ask you to close Windows apps and the desktop
-  first.
+- **Closing the window is not closing the apps.** Apps in Windows keep
+  running, as on a real PC whose screen you switch off, and are there again
+  when the window opens. The VM's idle timer stops them with Windows, so save
+  before you walk away.
+- **A file outside the shared folders** makes the window connect again with
+  that folder added. The apps in it stay open; the picture is redrawn.
 - **Store apps** (the ones without a real `.exe`) are not found by the scan.
 - **HiDPI.** Windows renders at your monitor's scale; set `scale` if you prefer
   another.
@@ -277,7 +282,9 @@ The Windows VM itself is Omarchy's and is left alone.
 
 ## Status
 
-Developed and tested on Omarchy 4.0 with FreeRDP 3.31 and Windows 11. Both
+3.0 replaces the app-per-window design of 2.x with the one Windows window; it
+is new and has had less use than 2.x had. Developed on Omarchy 4.0 with
+FreeRDP 3.31 and Windows 11. For 2.x, both
 ways of reaching the VM have been run end to end on the same machine: with
 sudoless Docker, and with Docker access switched off so that starting and
 stopping go through Omarchy's password prompt. It has not yet been run on a second machine. If something

@@ -36,12 +36,10 @@ cmd_doctor() {
   have sfreerdp3 || note "sfreerdp3 is missing" "the first sign-in after each Windows start will flash a window"
   have notify-send || note "notify-send is missing" "errors from the bar and the app launcher will not be shown"
   have gum || note "gum is missing" "winapp manage needs it: omarchy pkg add gum"
-  if ! shim_wanted; then
-    note "the helper-window fix is switched off (helperWindowFix in config.json)" "apps with an embedded browser, such as CorelDRAW, can freeze without it"
-  elif ensure_shim; then
-    ok "helper-window fix built"
+  if ensure_shim; then
+    ok "the shim for the Super key and the pointer is built"
   else
-    note "the helper-window fix could not be built" "it needs a C compiler: omarchy pkg add gcc. Without it, apps such as CorelDRAW can freeze"
+    note "the shim for the Super key and the pointer could not be built" "it needs a C compiler: omarchy pkg add gcc. Without it, Super shortcuts open Windows' Start menu"
   fi
   if [[ -e /dev/kvm ]]; then ok "KVM is available"; else bad "/dev/kvm is missing" "enable virtualization in the firmware setup"; fi
   if cli_linked; then
@@ -103,14 +101,14 @@ cmd_doctor() {
 
   say ""
   say "Inside Windows"
-  if clients_alive || desktop_elsewhere; then
-    say "  · skipped: Windows is in use, and the test needs the VM's only session"
+  if desktop_elsewhere; then
+    say "  · skipped: Omarchy's own Windows window is open, and the test needs the VM's only session"
   elif ! vm_running && ((!deep)); then
     say "  · skipped: Windows is not running (winapp doctor --deep starts it to test)"
   else
     exes=$(apps_json | jq -c '[.apps[].exe]')
     job=$(jq -cn --argjson exes "$exes" '{exists: $exes}')
-    frame_wanted && job=$(frame_job | jq -c --argjson job "$job" '$job + .')
+    job=$(agent_job | jq -c --argjson job "$job" '$job + .')
     job=$(tune_job | jq -c --argjson job "$job" '$job + .')
     if guest_run apply "$job" 120; then
       tune_noted
@@ -131,19 +129,17 @@ cmd_doctor() {
       else
         ok "every added app is installed"
       fi
-      if ! frame_wanted; then
-        say "  · window frames are left to Windows (titleBars and roundedCorners in config.json)"
-      elif frame_noted; then
-        ok "app windows lose Windows' title bar and rounded corners"
+      if agent_noted; then
+        ok "winapp's agent is built, and starts with every sign-in"
       else
-        note "$GUEST_ERROR" "apps still open, with Windows' own title bar and corners"
+        bad "$GUEST_ERROR" "files cannot be opened from Linux without it; see the newest guest log in $LOG_DIR"
       fi
       if console_free; then
-        ok "nobody is signed in on the console: the first app does not wait for that"
+        ok "nobody is signed in on the console: a cold start does not wait for that"
       elif [[ $(change_state fast) == yes ]]; then
-        note "Windows still signs in on its console at boot" "the first app waits half a minute for that; see the newest guest log in $LOG_DIR"
+        note "Windows still signs in on its console at boot" "a cold start waits half a minute for that; see the newest guest log in $LOG_DIR"
       else
-        say "  · Windows signs in on its console at boot, so the first app waits half a minute (to change that: winapp changes)"
+        say "  · Windows signs in on its console at boot, so a cold start waits half a minute (to change that: winapp changes)"
       fi
     else
       bad "$GUEST_ERROR"

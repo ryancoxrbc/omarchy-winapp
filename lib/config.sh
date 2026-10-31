@@ -15,10 +15,7 @@ ensure_config() {
   "scale": "auto",
   "pointerScale": "auto",
   "windowsSuffix": "auto",
-  "helperWindowFix": true,
   "superKey": "linux",
-  "titleBars": false,
-  "roundedCorners": false,
   "rdpArgs": []
 }
 EOF

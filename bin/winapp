@@ -1,11 +1,11 @@
 #!/bin/bash
-# winapp - run apps from the Omarchy Windows VM as ordinary windows, on Linux
-# files opened in place. See usage() below, or `winapp help`.
+# winapp - run apps from the Omarchy Windows VM on Linux files opened in
+# place, in one Windows window. See usage() below, or `winapp help`.
 #
 # Nothing is copied into the VM: FreeRDP redirects folders into the session
-# (the home directory as \\tsclient\home) and the app opens the file there, so
+# (a shared folder as \\tsclient\<name>) and the app opens the file there, so
 # saves land on the Linux side. The VM is started when needed and shut down a
-# few minutes after the last app window closes.
+# few minutes after the Windows window closes.
 
 set -u
 
@@ -14,15 +14,15 @@ ROOT=${SELF%/bin/*}
 
 usage() {
   cat <<'EOF'
-winapp - Windows VM apps as ordinary windows, on Linux files in place
+winapp - Windows VM apps on Linux files in place, in one Windows window
 
-Open
+Open (everything opens in the Windows window, which comes forward)
   winapp <app> [file...]       open an app, e.g. winapp word ~/Documents/a.docx
   winapp open <file>           open a file with whatever Windows uses for it
   winapp run <program> [file]  run any program by its Windows path, or an
                                installer (.exe, .msi) that is on the Linux side
   winapp explorer [folder]     browse a Linux folder in Windows Explorer
-  winapp desktop               the whole Windows desktop, to install programs
+  winapp desktop               open the Windows window, or bring it forward
 
 Apps
   winapp manage                tick the installed programs you want on Linux
@@ -43,7 +43,7 @@ Windows
   winapp start | stop          boot the VM without an app / shut it down now
   winapp mode [cold|warm]      cold: start Windows for an app, stop it when idle
                                warm: start it at login and keep it, for instant apps
-  winapp idle <minutes>        stop the VM this long after the last window (0 = never)
+  winapp idle <minutes>        stop the VM this long after the window closes (0 = never)
   winapp resources [--ram <GB>] [--cores <n>]
                                show, or change, the VM's memory and processors
   winapp status                what the VM is doing
@@ -82,8 +82,8 @@ source "$ROOT/lib/paths.sh"
 source "$ROOT/lib/launch.sh"
 # shellcheck source=lib/guest.sh
 source "$ROOT/lib/guest.sh"
-# shellcheck source=lib/frame.sh
-source "$ROOT/lib/frame.sh"
+# shellcheck source=lib/agent.sh
+source "$ROOT/lib/agent.sh"
 # shellcheck source=lib/apps.sh
 source "$ROOT/lib/apps.sh"
 # shellcheck source=lib/resources.sh
@@ -128,6 +128,7 @@ logs) cmd_logs "${2:-}" ;;
 uninstall) shift; cmd_uninstall "$@" ;;
 changes) shift; cmd_changes "$@" ;;
 __idle) cmd___idle "${2:-}" "${3:-0}" ;;
+__desktop) cmd___desktop ;;
 __ask) cmd___ask ;;
 -*) die "unknown option: $1 (see: winapp help)" ;;
 *) cmd_app "$@" ;;

@@ -1,47 +1,12 @@
 /*
  * winapp-xshim: corrections to how FreeRDP's X11 client (xfreerdp) behaves on
  * a tiling Wayland desktop. winapp loads it into the client with LD_PRELOAD;
- * nothing else is affected. There are three: what the client does to Windows'
- * helper windows, what it does with the Super key, and how large it shows
- * the mouse pointer.
+ * nothing else is affected. There are two: what the client does with the
+ * Super key, and how large it shows the mouse pointer.
  *
- * --- Helper windows ---
- *
- * Windows programs keep small helper windows around that the user never
- * sees or touches: the hidden windows of an embedded Internet Explorer
- * control, pseudo-console windows, and also every classic menu and tooltip.
- * xfreerdp shows them as override-redirect X11 windows, which is right, but
- * then treats them like windows the user manages:
- *
- * 1. It labels them _NET_WM_WINDOW_TYPE_DIALOG. A Wayland compositor running
- *    X11 clients (Hyprland here) gives keyboard focus to override-redirect
- *    windows of that type, and xfreerdp answers focus by telling Windows to
- *    activate the helper window.
- *
- * 2. It reports whatever geometry the compositor gives them back to Windows
- *    as the user having moved or resized the window. Hyprland does not leave
- *    a window smaller than 20 pixels, and when it scales X11 clients it also
- *    rounds geometry by a pixel. So a helper window that Windows keeps at 0x0
- *    is resized, on the Windows side, to 20x20 (21x21 at a fractional scale),
- *    and a menu can come back a pixel wider than it was.
- *
- * A program does not expect either to happen to a window it hides. CorelDRAW's
- * welcome screen, or any program with an Internet Explorer control, answers by
- * spinning its UI thread: the window turns white, "Not Responding", for good.
- * It happens the moment the resize is relayed, which can be at start-up or
- * minutes later, when some other window opens.
- *
- * So, for override-redirect windows only: the type becomes DROPDOWN_MENU,
- * which is what xfreerdp itself first picks for them and which compositors do
- * not focus, and geometry notifications are dropped, since Windows alone
- * decides where such a window is. Ordinary windows are left exactly as they are.
- *
- * A helper window that Windows keeps at 0x0 has nothing to show at all, and
- * yet the client maps it (as 1x1, the smallest X11 has). The compositor then
- * lists it among the desktop's windows, on whatever workspace was in view,
- * and workspace indicators draw an icon for it. So such a window is not
- * mapped for as long as it is that small; it is the moment Windows gives it
- * a size.
+ * (Before 3.0, winapp showed each Windows app in a window of its own, and
+ * this also corrected what xfreerdp did to Windows' hidden helper windows.
+ * The whole desktop in one window has no such windows.)
  *
  * --- The Super key ---
  *
@@ -70,79 +35,10 @@
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
-#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
-
-#define MAX_WINDOWS 4096
-
-static Window unmanaged[MAX_WINDOWS]; /* override-redirect windows of this client */
-static int count;
-static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-
-/* Where a window is in the list, or -1. Called with the lock held. */
-static int find(Window window)
-{
-	for (int i = 0; i < count; i++)
-	{
-		if (unmanaged[i] == window)
-			return i;
-	}
-	return -1;
-}
-
-static int is_unmanaged(Window window)
-{
-	pthread_mutex_lock(&lock);
-	const int found = find(window) >= 0;
-	pthread_mutex_unlock(&lock);
-	return found;
-}
-
-static void set_unmanaged(Window window, int on)
-{
-	pthread_mutex_lock(&lock);
-	const int at = find(window);
-	if (on && at < 0 && count < MAX_WINDOWS)
-		unmanaged[count++] = window;
-	else if (!on && at >= 0)
-		unmanaged[at] = unmanaged[--count];
-	pthread_mutex_unlock(&lock);
-}
-
-int XChangeWindowAttributes(Display* display, Window window, unsigned long mask,
-                            XSetWindowAttributes* attributes)
-{
-	static int (*real)(Display*, Window, unsigned long, XSetWindowAttributes*);
-	if (!real)
-		real = dlsym(RTLD_NEXT, "XChangeWindowAttributes");
-	if ((mask & CWOverrideRedirect) && attributes)
-		set_unmanaged(window, attributes->override_redirect);
-	return real(display, window, mask, attributes);
-}
-
-int XChangeProperty(Display* display, Window window, Atom property, Atom type, int format,
-                    int mode, const unsigned char* data, int nelements)
-{
-	static int (*real)(Display*, Window, Atom, Atom, int, int, const unsigned char*, int);
-	static Atom window_type, dialog, dropdown_menu;
-	if (!real)
-		real = dlsym(RTLD_NEXT, "XChangeProperty");
-	if (format == 32 && nelements == 1 && data && is_unmanaged(window))
-	{
-		if (!window_type)
-		{
-			dialog = XInternAtom(display, "_NET_WM_WINDOW_TYPE_DIALOG", False);
-			dropdown_menu = XInternAtom(display, "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU", False);
-			window_type = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
-		}
-		if (property == window_type && *(const Atom*)data == dialog)
-			data = (const unsigned char*)&dropdown_menu;
-	}
-	return real(display, window, property, type, format, mode, data, nelements);
-}
 
 /* Per key code: its press was withheld, so its release will be too; and its
  * press went through, so the client holds it down. */
@@ -208,12 +104,7 @@ int XNextEvent(Display* display, XEvent* event)
 	int rc = real(display, event);
 	/* An event is never dropped, which would mean waiting here for the next
 	 * one: it is turned into a kind the client has no handler for. */
-	if (event->type == ConfigureNotify &&
-	    (event->xconfigure.override_redirect || is_unmanaged(event->xconfigure.window)))
-	{
-		event->type = GravityNotify;
-	}
-	else if ((event->type == KeyPress || event->type == KeyRelease) && keeps_super() &&
+	if ((event->type == KeyPress || event->type == KeyRelease) && keeps_super() &&
 	         belongs_to_desktop(&event->xkey))
 	{
 		event->type = GravityNotify;
@@ -225,132 +116,6 @@ int XNextEvent(Display* display, XEvent* event)
 		memset(down, 0, sizeof(down));
 	}
 	return rc;
-}
-
-/* Windows with no size (1x1 at most), and whether the client wants each shown. */
-static struct
-{
-	Window window;
-	int wanted;
-} empty[MAX_WINDOWS];
-static int empties;
-
-/* Where a window is among the empty ones, or -1. Called with the lock held. */
-static int find_empty(Window window)
-{
-	for (int i = 0; i < empties; i++)
-	{
-		if (empty[i].window == window)
-			return i;
-	}
-	return -1;
-}
-
-/* Note a window's size. Returns 1 when it has just become large enough to
- * show and the client asked for that while it was empty. */
-static int sized(Window window, unsigned width, unsigned height)
-{
-	int show = 0;
-	pthread_mutex_lock(&lock);
-	const int at = find_empty(window);
-	if (width <= 1 && height <= 1)
-	{
-		if (at < 0 && empties < MAX_WINDOWS)
-		{
-			empty[empties].window = window;
-			empty[empties++].wanted = 0;
-		}
-	}
-	else if (at >= 0)
-	{
-		show = empty[at].wanted;
-		empty[at] = empty[--empties];
-	}
-	pthread_mutex_unlock(&lock);
-	return show;
-}
-
-/* Record whether the client wants an empty window shown. Returns 1 when the
- * window is empty, 0 when it is not and the call is the client's own affair. */
-static int want_empty(Window window, int wanted)
-{
-	pthread_mutex_lock(&lock);
-	const int at = find_empty(window);
-	if (at >= 0)
-		empty[at].wanted = wanted;
-	pthread_mutex_unlock(&lock);
-	return at >= 0;
-}
-
-static int map(Display* display, Window window)
-{
-	static int (*real)(Display*, Window);
-	if (!real)
-		real = dlsym(RTLD_NEXT, "XMapWindow");
-	return real(display, window);
-}
-
-Window XCreateWindow(Display* display, Window parent, int x, int y, unsigned int width,
-                     unsigned int height, unsigned int border, int depth, unsigned int class,
-                     Visual* visual, unsigned long mask, XSetWindowAttributes* attributes)
-{
-	static Window (*real)(Display*, Window, int, int, unsigned int, unsigned int, unsigned int,
-	                      int, unsigned int, Visual*, unsigned long, XSetWindowAttributes*);
-	if (!real)
-		real = dlsym(RTLD_NEXT, "XCreateWindow");
-	const Window window =
-	    real(display, parent, x, y, width, height, border, depth, class, visual, mask, attributes);
-	(void)sized(window, width, height);
-	return window;
-}
-
-int XMapWindow(Display* display, Window window)
-{
-	if (is_unmanaged(window) && want_empty(window, 1))
-		return 1;
-	return map(display, window);
-}
-
-int XUnmapWindow(Display* display, Window window)
-{
-	static int (*real)(Display*, Window);
-	if (!real)
-		real = dlsym(RTLD_NEXT, "XUnmapWindow");
-	(void)want_empty(window, 0);
-	return real(display, window);
-}
-
-int XResizeWindow(Display* display, Window window, unsigned int width, unsigned int height)
-{
-	static int (*real)(Display*, Window, unsigned int, unsigned int);
-	if (!real)
-		real = dlsym(RTLD_NEXT, "XResizeWindow");
-	const int rc = real(display, window, width, height);
-	if (sized(window, width, height))
-		map(display, window);
-	return rc;
-}
-
-int XMoveResizeWindow(Display* display, Window window, int x, int y, unsigned int width,
-                      unsigned int height)
-{
-	static int (*real)(Display*, Window, int, int, unsigned int, unsigned int);
-	if (!real)
-		real = dlsym(RTLD_NEXT, "XMoveResizeWindow");
-	const int rc = real(display, window, x, y, width, height);
-	if (sized(window, width, height))
-		map(display, window);
-	return rc;
-}
-
-int XDestroyWindow(Display* display, Window window)
-{
-	static int (*real)(Display*, Window);
-	if (!real)
-		real = dlsym(RTLD_NEXT, "XDestroyWindow");
-	set_unmanaged(window, 0);
-	(void)sized(window, 2, 2); /* forgotten */
-	return real(display, window);
 }
 
 /* libXcursor's XcursorImage, which the client fills in itself. Pixels are

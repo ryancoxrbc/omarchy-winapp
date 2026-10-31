@@ -79,10 +79,7 @@ fresh() {
   "scale": "auto",
   "pointerScale": "auto",
   "windowsSuffix": "auto",
-  "helperWindowFix": true,
   "superKey": "linux",
-  "titleBars": false,
-  "roundedCorners": false,
   "fastStart": true,
   "trimWindows": true,
   "rdpArgs": []
@@ -125,7 +122,7 @@ read -r LISTEN_PORT <&"$listener"
 load() {
   SELF=$WINAPP
   # shellcheck source=/dev/null
-  for lib in common config vm rdp paths launch guest frame apps resources doctor setup; do source "$ROOT/lib/$lib.sh"; done
+  for lib in common config vm rdp paths launch guest agent apps resources doctor setup; do source "$ROOT/lib/$lib.sh"; done
 }
 
 group() { # group <name>: true when this group should run
@@ -270,73 +267,97 @@ if group "scan: matching installed programs to the catalog"; then (
 ); failed=$((failed + $?)); fi
 
 # -------------------------------------------------------------------------------
-if group "launch: starting the VM and an app"; then (
+if group "launch: Windows in a window, and files opened in it"; then (
   failed=0
-  mkdir -p "$HOME/Documents"
+  load
   doc="$HOME/Documents/Sam's report, final.docx"
   touch "$doc"
   "$WINAPP" add word --exe 'C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE' --name "Microsoft Word" \
     --args '/q' --icon "$ROOT/tests/fixtures/icon.png" >/dev/null 2>&1
   : >"$STUB_OUT/window-open"
+  word='"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE" /q'
 
   is "state before: stopped" "$("$WINAPP" state | jq -r .vm)" "stopped"
-  "$WINAPP" word "$doc" >"$STUB_OUT/launch.out" 2>&1 &
-  launcher=$!
-  for _ in $(seq 100); do [[ -s $STUB_OUT/launch.rdp ]] && break; sleep 0.1; done
-
+  succeeds "a file opens" "$WINAPP" word "$doc"
   # Docker is reachable but the bind anchors are not mounted, as after a reboot
   has "the VM was started through Omarchy's helper" "$(cat "$STUB_OUT/pkexec.calls")" "$WINAPP_VM_HELPER __priv up_wait"
-  rdp=$(cat "$STUB_OUT/launch.rdp" 2>/dev/null)
-  has "the app is started through the frame program, named in the connection file" "$rdp" 'remoteapplicationprogram:s:C:\ProgramData\winapp\winapp-frame.exe'
-  has "…which gets the app, its fixed arguments and the quoted file, apostrophe and comma intact" "$rdp" \
-    'remoteapplicationcmdline:s:"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE" /q "\\tsclient\home\Documents\Sam'"'"'s report, final.docx"'
+  is "the agent was built in Windows first" "$(jq -r .agent.stamp "$STUB_OUT/guest.in.json")" "$(cksum <"$ROOT/guest/agent.cs" | cut -d' ' -f1)"
+  [[ -s $GUEST_DIR/agent.cs ]] && pass || fail "…its source sent along"
+  is "Windows is asked to open the file in its app, apostrophe and comma intact" "$(cat "$STUB_OUT/requests")" \
+    "open $word \"\\\\tsclient\\home\\Documents\\Sam's report, final.docx\""
   args=$(cat "$STUB_OUT/client.args" 2>/dev/null)
   if command -v cc >/dev/null && [[ -e /usr/include/X11/Xlib.h ]]; then
-    has "the helper-window fix is built and loaded into the client" "$(cat "$STUB_OUT/client.preload")" "$XDG_DATA_HOME/winapp/xshim.so"
+    has "the shim is built and loaded into the client" "$(cat "$STUB_OUT/client.preload")" "$XDG_DATA_HOME/winapp/xshim.so"
   fi
   has "credentials go in over stdin" "$args" '/u:tester'
   has "…with = and quotes in the password intact" "$args" '/p:p=ss w"rd'
   has "home is redirected" "$args" "/drive:home,$HOME"
-  has "the app windows carry winapp's class" "$args" "/wm-class:winapp"
+  has "…and the folder requests go through" "$args" "/drive:winappq,$REQUESTS"
+  lacks "it is the whole desktop, not a single app" "$args" "/app:"
+  has "the window carries winapp's class" "$args" "/wm-class:winapp-desktop"
   is "…and the command line carries nothing else" "$(cat "$STUB_OUT/client.argv")" "/args-from:stdin"
+  pid=$(cat "$STUB_OUT/client.pid")
+  has "the Windows window is brought forward" "$(cat "$STUB_OUT/dispatch.calls")" "hl.dsp.focus({ window = \"pid:$pid\" })"
+  kill -0 "$pid" 2>/dev/null && pass || fail "it stays open after the command that opened it has ended"
 
-  sleep 1.5
   state=$("$WINAPP" state)
   is "state while open: running" "$(jq -r .vm <<<"$state")" "running"
-  is "…with one window" "$(jq -r .windows <<<"$state")" "1"
+  is "…with the window open" "$(jq -r '"\(.desktop) \(.windows)"' <<<"$state")" "true 1"
   is "…and no countdown" "$(jq -r .idleDeadline <<<"$state")" "0"
 
-  rm -f "$STUB_OUT/window-open" # the user closes the app
-  wait "$launcher"
-  is "the launcher ends cleanly once the window is gone" "$?" "0"
-  is "…without complaint" "$(cat "$STUB_OUT/launch.out")" ""
-  [[ ! -d /proc/$(cat "$STUB_OUT/client.pid") ]] && pass || fail "the client is disconnected"
-  state=$("$WINAPP" state)
-  [[ $(jq -r .idleDeadline <<<"$state") -gt $(date +%s) ]] && pass || fail "the idle countdown starts" "$state"
+  touch "$HOME/Documents/b.docx"
+  succeeds "a second file opens" "$WINAPP" word "$HOME/Documents/b.docx"
+  is "…in the same window" "$(cat "$STUB_OUT/client.pid")" "$pid"
+  is "…as one more request" "$(wc -l <"$STUB_OUT/requests")" "2"
+  is "…and nothing is built again" "$(wc -l <"$STUB_OUT/guest.runs")" "1"
+  succeeds "an app opens without a file" "$WINAPP" word
+  is "…as just its program" "$(tail -n1 "$STUB_OUT/requests")" "open $word"
+  succeeds "a file opens with whatever Windows uses for it" "$WINAPP" open "$HOME/Documents/b.docx"
+  is "…through the shell" "$(tail -n1 "$STUB_OUT/requests")" 'open "C:\Windows\System32\rundll32.exe" url.dll,FileProtocolHandler \\tsclient\home\Documents\b.docx'
 
+  mkdir -p "$TMP/world/outside"
+  touch "$TMP/world/outside/c.docx"
+  succeeds "a file outside every shared folder opens" "$WINAPP" word "$TMP/world/outside/c.docx"
+  new=$(cat "$STUB_OUT/client.pid")
+  [[ $new != "$pid" ]] && pass || fail "…through a new connection"
+  has "…that redirects its folder" "$(cat "$STUB_OUT/client.args")" ",$TMP/world/outside"
+  for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+  kill -0 "$pid" 2>/dev/null && fail "…replacing the old one" || pass
+  is "…without starting the idle countdown" "$("$WINAPP" state | jq -r .idleDeadline)" "0"
+  has "…and the file is opened in it" "$(tail -n1 "$STUB_OUT/requests")" '\c.docx"'
+
+  : >"$STUB_OUT/agent-off"
+  out=$("$WINAPP" word "$doc" 2>&1)
+  is "a request the agent does not take is an error" "$?" "1"
+  has "…that says so" "$out" "did not pick up the request"
+  is "…and is withdrawn" "$(ls "$REQUESTS")" ""
+  rm -f "$STUB_OUT/agent-off"
+
+  succeeds "winapp desktop with the window open just brings it forward" "$WINAPP" desktop
+  is "…the same one" "$(cat "$STUB_OUT/client.pid")" "$new"
+
+  printf 'Sam & co.docx - Word\n' >"$REQUESTS/open.txt" # what the agent last saw open
+  rm -f "$STUB_OUT/desktop.calls"
+  kill "$new"
+  for _ in $(seq 50); do [[ -e $RUN_DIR/desktop.pid ]] || break; sleep 0.1; done
+  state=$("$WINAPP" state)
+  is "closing the window is seen" "$(jq -r .desktop <<<"$state")" "false"
+  has "…and what was still open in it is named" "$(cat "$STUB_OUT/desktop.calls" 2>/dev/null)" "Still open in Windows Sam &amp; co.docx - Word"
+  has "…with when Windows will stop" "$(cat "$STUB_OUT/desktop.calls" 2>/dev/null)" "after 5 idle minutes"
+  [[ $(jq -r .idleDeadline <<<"$state") -gt $(date +%s) ]] && pass || fail "…and starts the idle countdown" "$state"
   succeeds "stop" "$WINAPP" stop
   is "state after stop: stopped" "$("$WINAPP" state | jq -r .vm)" "stopped"
-  [[ ! -e $XDG_RUNTIME_DIR/winapp/idle ]] && pass || fail "stopping cancels the countdown"
+  [[ ! -e $RUN_DIR/idle ]] && pass || fail "stopping cancels the countdown"
 
-  printf '[ERROR] RAIL exec error: execResult=RAIL_EXEC_E_FILE_NOT_FOUND [0x5]\n' >"$STUB_OUT/client.fail"
-  out=$("$WINAPP" run 'C:\gone\app.exe' 2>&1)
-  is "a program Windows cannot start is an error" "$?" "1"
-  has "…that says what to do" "$out" "winapp scan"
-  is "…reached after trying once more without the frame program" "$(jq -r '.guestFrame.ok' "$XDG_CONFIG_HOME/winapp/config.json")" "false"
-  rm -f "$STUB_OUT/client.fail"
-
-  # Windows shows its desktop or single apps, never both
-  "$WINAPP" desktop >/dev/null 2>&1 &
-  desk=$!
-  for _ in $(seq 100); do [[ -s $XDG_RUNTIME_DIR/winapp/desktop.pid ]] && break; sleep 0.1; done
-  is "state reports an open desktop" "$("$WINAPP" state | jq -r .desktop)" "true"
+  # Omarchy's own window has no folder for requests
+  bash -c "exec -a 'xfreerdp3 /v:127.0.0.1:$LISTEN_PORT' sleep 600" &
+  omarchy=$!
+  sleep 0.2
   out=$("$WINAPP" word "$doc" 2>&1)
-  is "an app is refused while the desktop is open" "$?" "1"
-  has "…and says what to close" "$out" "Close the desktop window first"
-  refuses "…as is a second desktop" "$WINAPP" desktop
-  kill "$(cat "$XDG_RUNTIME_DIR/winapp/desktop.pid")"
-  wait "$desk"
-  is "state after the desktop closes" "$("$WINAPP" state | jq -r .desktop)" "false"
+  is "a file is refused while Omarchy's own Windows window is open" "$?" "1"
+  has "…with what to do" "$out" "Close it, then open the file again"
+  kill "$omarchy"
+  wait "$omarchy" 2>/dev/null
 
   refuses "an unknown app is an error" "$WINAPP" nosuchapp
   refuses "a missing file is an error" "$WINAPP" word "$HOME/Documents/missing.docx"
@@ -345,88 +366,26 @@ if group "launch: starting the VM and an app"; then (
 ); failed=$((failed + $?)); fi
 
 # -------------------------------------------------------------------------------
-if group "frames and keys: fitting a tiling desktop"; then (
+if group "keys and pointer"; then (
   failed=0
   load
-  "$WINAPP" add word --exe 'C:\Office\WINWORD.EXE' --name "Microsoft Word" --icon "$ROOT/tests/fixtures/icon.png" >/dev/null 2>&1
   : >"$STUB_OUT/window-open"
-  rdp_credentials
-  runs() { wc -l <"$STUB_OUT/guest.runs" 2>/dev/null || echo 0; }
-  # start an app the way a launch does, and give back its connection file
-  spawned() {
-    rm -f "$STUB_OUT/launch.rdp"
-    vm_up >/dev/null 2>&1
-    mkdir -p "$RUN_DIR/clients"
-    app_spawn "$TMP/world/spawn.log" Word 'C:\Office\WINWORD.EXE' "$1" >/dev/null 2>&1
-    kill "$RDP_PID" 2>/dev/null
-    wait "$RDP_PID" 2>/dev/null
-    rm -f "$RUN_DIR/clients/$RDP_PID"
-    cat "$STUB_OUT/launch.rdp"
+  opened() { # open the Windows window, and close it again
+    "$WINAPP" desktop >/dev/null 2>&1
+    kill "$(cat "$STUB_OUT/client.pid")" 2>/dev/null
+    for _ in $(seq 50); do [[ -e $RUN_DIR/desktop.pid ]] || break; sleep 0.1; done
   }
-
-  frame_wanted && pass || fail "window frames are tidied unless switched off"
-  rdp=$(spawned '/q "x.docx"')
-  has "an app is started through the frame program" "$rdp" 'remoteapplicationprogram:s:C:\ProgramData\winapp\winapp-frame.exe'
-  has "…which is handed the app and its arguments" "$rdp" 'remoteapplicationcmdline:s:"C:\Office\WINWORD.EXE" /q "x.docx"'
-  is "it was built in Windows first" "$(runs)" "1"
-  is "…with the settings" "$(jq -c '.frame | {titleBars, roundedCorners, keep}' "$STUB_OUT/guest.in.json")" \
-    '{"titleBars":false,"roundedCorners":false,"keep":[]}'
-  [[ -s $GUEST_DIR/frame.cs ]] && pass || fail "…and its source sent along"
-  rdp=$(spawned '')
-  has "an app without arguments is handed over just the same" "$rdp" 'remoteapplicationcmdline:s:"C:\Office\WINWORD.EXE"'
-  is "nothing is built again for the next app" "$(runs)" "1"
+  opened
   is "the Super key stays with the Linux desktop" "$(cat "$STUB_OUT/client.super")" ""
-
-  apps_update '(.apps[] | select(.id == "word") | .titleBar) = true'
-  frame_current && fail "an app that keeps its title bar puts the VM's settings out of date" || pass
-  spawned '' >/dev/null
-  is "…so they are sent again" "$(runs)" "2"
-  is "…naming the program to leave alone" "$(jq -c '.frame.keep' "$STUB_OUT/guest.in.json")" '["WINWORD.EXE"]'
-
-  cfg_set roundedCorners true
-  rdp_spawn xfreerdp3 "$TMP/world/open.log" ""
-  : >"$RUN_DIR/clients/$RDP_PID"
-  sleep 0.3
-  standing_refresh
-  is "nothing is sent while an app is open: that would take its session" "$(runs)" "2"
-  kill "$RDP_PID"
-  wait "$RDP_PID" 2>/dev/null
-  rm -f "$RUN_DIR/clients/$RDP_PID"
-  spawned '' >/dev/null
-  is "…it goes with the next app started from cold" "$(runs)" "3"
-  is "…carrying the changed setting" "$(jq -c '.frame.roundedCorners' "$STUB_OUT/guest.in.json")" "true"
-
-  cfg_set titleBars true
-  frame_wanted && fail "with both left to Windows there is nothing to do" || pass
-  rdp=$(spawned '/q')
-  has "…and the app is started directly" "$rdp" 'remoteapplicationprogram:s:C:\Office\WINWORD.EXE'
-  has "…with its own arguments" "$rdp" 'remoteapplicationcmdline:s:/q'
-  is "…with nothing sent to Windows" "$(runs)" "3"
-
-  cfg_set titleBars false
-  is "back to settings the VM already has: nothing to send" "$(spawned '' >/dev/null; runs)" "3"
-  cfg_set roundedCorners false
-  printf '{"frame":{"status":"failed: no compiler"}}\n' >"$STUB_OUT/guest.json"
-  rdp=$(spawned '/q')
-  is "a changed setting is sent" "$(runs)" "4"
-  has "when Windows cannot build the program the app is started directly" "$rdp" 'remoteapplicationprogram:s:C:\Office\WINWORD.EXE'
-  spawned '/q' >/dev/null
-  is "…and the build is not tried again with every app" "$(runs)" "4"
-  rm -f "$STUB_OUT/guest.json"
-  succeeds "setup builds it again" guest_prepare
-  frame_usable && pass || fail "…and is used again"
-
-  cfg_set superKey '"windows"'
-  spawned '' >/dev/null
-  is "superKey: windows hands the Super key to Windows" "$(cat "$STUB_OUT/client.super")" "windows"
-
   is "at 100% the mouse pointer is left as Windows draws it" "$(cat "$STUB_OUT/client.pointer")" ""
+  cfg_set superKey '"windows"'
   STUB_SCALE=2
   export STUB_SCALE
-  spawned '' >/dev/null
-  is "on a 200% monitor the client is told to halve it" "$(cat "$STUB_OUT/client.pointer")" "200"
+  opened
+  is "superKey: windows hands the Super key to Windows" "$(cat "$STUB_OUT/client.super")" "windows"
+  is "on a 200% monitor the client is told to halve the pointer" "$(cat "$STUB_OUT/client.pointer")" "200"
   cfg_set pointerScale 100
-  spawned '' >/dev/null
+  opened
   is "pointerScale: 100 leaves it alone" "$(cat "$STUB_OUT/client.pointer")" ""
   unset STUB_SCALE
   "$WINAPP" stop >/dev/null 2>&1
@@ -434,10 +393,9 @@ if group "frames and keys: fitting a tiling desktop"; then (
 ); failed=$((failed + $?)); fi
 
 # -------------------------------------------------------------------------------
-if group "sessions: the next app, and a start that does not wait"; then (
+if group "sessions: requests, jobs, and a start that does not wait"; then (
   failed=0
   load
-  "$WINAPP" add word --exe 'C:\Office\WINWORD.EXE' --name "Microsoft Word" --icon "$ROOT/tests/fixtures/icon.png" >/dev/null 2>&1
   : >"$STUB_OUT/window-open"
   rdp_credentials
   mkdir -p "$RUN_DIR/clients"
@@ -445,103 +403,44 @@ if group "sessions: the next app, and a start that does not wait"; then (
   rdp_listening && pass || fail "a port that confirms an RDP connection request is Windows listening"
   (RDP_PORT=1 && rdp_listening) && fail "a port that does not is not" || pass
 
-  # the next app goes to the session that is open
-  refuses "with no app open there is no session to ask" session_start 'C:\x.exe' ''
-  vm_up >/dev/null 2>&1
-  app_spawn "$TMP/world/spawn.log" Word 'C:\Office\WINWORD.EXE' '' >/dev/null 2>&1
-  has "an app's session redirects a folder for requests" "$(cat "$STUB_OUT/client.args")" "/drive:winappq,$REQUESTS"
-  # the frame program's part: it takes a request by renaming it
+  # a request is taken by renaming it
   (
     for _ in $(seq 100); do
-      for request in "$REQUESTS"/*.req; do
-        [[ -e $request ]] && mv "$request" "$STUB_OUT/request" && exit
+      for f in "$REQUESTS"/*.req; do
+        [[ -e $f ]] && mv "$f" "$STUB_OUT/request" && exit
       done
       sleep 0.05
     done
   ) &
-  succeeds "the next app is handed to the open session" session_start 'C:\Office\EXCEL.EXE' '"\\tsclient\home\a b.xlsx"'
+  desktop_ours() { return 0; }
+  succeeds "a request that is taken succeeds" request open '"C:\x.exe"' 5
   wait $!
-  is "…as its command line" "$(cat "$STUB_OUT/request")" '"C:\Office\EXCEL.EXE" "\\tsclient\home\a b.xlsx"'
-  asked_lately && pass || fail "…and the connection is kept for the window that is coming"
-  refuses "a request nobody takes is withdrawn, and a connection made instead" session_start 'C:\x.exe' ''
-  # an app whose start screen would become the file
-  is "a file opens as usual beside a document" "$(start_screen_args word 'C:\Office\WINWORD.EXE')" ""
-  is "…and gets a window of its own beside the app's start screen" "$(STUB_TITLE=Word start_screen_args word 'C:/Office/WINWORD.EXE')" "/w"
-  is "…which is that app's alone" "$(STUB_TITLE=Word start_screen_args excel 'C:\Office\EXCEL.EXE')" ""
-  is "…each with its own switch" "$(STUB_TITLE=Excel start_screen_args excel 'C:\Office\EXCEL.EXE')" "/x"
-  is "…and none for an app that has no such switch" "$(STUB_TITLE=PowerPoint start_screen_args powerpoint 'C:\Office\POWERPNT.EXE')" ""
-  is "…and not a program that only shares its name" "$(STUB_TITLE=Word start_screen_args word 'C:\Other\word.exe')" ""
+  is "…and carries its kind and command line" "$(cat "$STUB_OUT/request")" $'open\n"C:\\x.exe"'
+  refuses "one nobody takes is withdrawn" request open '"C:\x.exe"' 1
   is "…leaving nothing behind" "$(ls "$REQUESTS")" ""
-  printf 'x123456\t%s\n' "$TMP" >>"$DRIVES_FILE"
-  refuses "a file the session cannot reach needs a connection of its own" session_start 'C:\x.exe' ''
-  kill "$RDP_PID" 2>/dev/null
-  wait "$RDP_PID" 2>/dev/null
-  rm -f "$RUN_DIR/clients/$RDP_PID" "$DRIVES_FILE"
+  unset -f desktop_ours
+  load
 
-  # a connection that takes the session over shows its windows anew
-  (
-    hyprctl() {
-      case "$1 $2" in
-      "clients -j") cat "$STUB_OUT/clients.json" ;;
-      "dispatch "*) echo "$2" >>"$STUB_OUT/moves" ;;
-      esac
-    }
-    clients_alive() { return 0; }
-    echo '[{"class":"winapp","title":"a.docx - Word","pid":1,"address":"0x1","workspace":{"name":"3"}}]' >"$STUB_OUT/clients.json"
-    places_note
-    echo '[{"class":"winapp","title":"a.docx - Word","pid":2,"address":"0x2","workspace":{"name":"1"}},
-           {"class":"winapp","title":"b.docx - Word","pid":2,"address":"0x3","workspace":{"name":"1"}}]' >"$STUB_OUT/clients.json"
-    places_restore 2
-    is "a window that was open goes back to its workspace, and the new one stays" "$(cat "$STUB_OUT/moves")" \
-      'hl.dsp.window.move({ workspace = "3", follow = false, window = "address:0x2" })'
-  )
-
-  # a client that stops reading what Windows sends (FreeRDP 3.32.2 deadlocks)
-  (
-    STALL_LOOKS=2
-    vm_up >/dev/null 2>&1
-    ss() { printf '0 0 127.0.0.1:1 127.0.0.1:%s users:(("xfreerdp3",pid=4242,fd=19))\n' "$RDP_PORT"
-      printf '512 0 127.0.0.1:2 127.0.0.1:%s users:(("xfreerdp3",pid=%s,fd=19))\n' "$RDP_PORT" "$STUB_PID"; }
-    STUB_PID=7 && is "what a client has left unread is read off its own connection" "$(backlog 7)" 512
-    is "…and a client without one has nothing waiting" "$(backlog 8)" ""
-    unset -f ss
-
-    backlog() { echo 4096; }
-    app_spawn "$TMP/world/stall.log" Word 'C:\Office\WINWORD.EXE' '' >/dev/null 2>&1
-    pid=$RDP_PID && mapfile -t kids < <(pgrep -P "$RDP_PID")
-    app_watch "$TMP/world/stall.log" 'C:\Office\WINWORD.EXE'
-    is "a client that leaves data unread is put down" "$?" 3
-    kill -0 "$pid" 2>/dev/null && fail "…even when it does not answer TERM" || pass
-    has "…and the log says why" "$(cat "$TMP/world/stall.log")" "4096 bytes from Windows unread"
-    ((${#kids[@]})) && kill "${kids[@]}" 2>/dev/null
-
-    REJOIN=1
-    app_spawn "$TMP/world/rejoin.log" Word 'C:\Office\WINWORD.EXE' '"\\tsclient\home\a.docx"' >/dev/null 2>&1
-    REJOIN=0
-    has "the new connection starts the frame program" "$(cat "$STUB_OUT/launch.rdp")" "remoteapplicationprogram:s:$FRAME_EXE"
-    lacks "…alone, so that no second copy of the app opens" "$(cat "$STUB_OUT/launch.rdp")" "remoteapplicationcmdline"
-    has "…and can be asked for the next app" "$(cat "$STUB_OUT/client.args")" "/drive:winappq,$REQUESTS"
-
-    # a busy client that keeps reading is left alone
-    # called in a subshell each time, so it counts its looks in a file
-    backlog() { echo x >>"$STUB_OUT/looks"; (($(wc -l <"$STUB_OUT/looks") % 2)) && echo 4096 || echo 100; }
-    (sleep 7 && kill "$RDP_PID") 2>/dev/null &
-    app_watch "$TMP/world/rejoin.log" 'C:\Office\WINWORD.EXE'
-    is "a client whose backlog shrinks between looks is not stalled" "$?" 0
-    wait
-    exit $failed
-  ); failed=$((failed + $?))
-
-  # the console
-  is "the changes that were agreed to went along with the first app's job" "$(jq -c .tune "$STUB_OUT/guest.in.json")" '{"fast":true,"trim":true}'
+  # the first opening carries the changes that were agreed to
+  "$WINAPP" desktop >/dev/null 2>&1
+  is "the changes that were agreed to went along with the first job" "$(jq -c .tune "$STUB_OUT/guest.in.json")" '{"fast":true,"trim":true}'
+  is "…which ran as a hidden RemoteApp, since nothing was open" "$(wc -l <"$STUB_OUT/guest.runs")" "1"
   console_free && fail "a VM that has not said so is taken to sign in on its console" || pass
   has "…and is started the way that waits for that" "$(cat "$STUB_OUT/pkexec.calls")" "__priv up_wait"
   [[ -s $STUB_OUT/prime.runs ]] && pass || fail "…with a logon that claims the console's session"
-  printf '{"frame":{"status":"ok"},"tune":{"console":false,"search":4,"widgets":0}}\n' >"$STUB_OUT/guest.json"
+
+  # while the window is open, a job goes through the agent
+  rm -f "$STUB_OUT/guest.args"
+  printf '{"agent":{"status":"ok"},"tune":{"console":false,"search":4,"widgets":0}}\n' >"$STUB_OUT/guest.json"
   cfg_set trimWindows false
   standing_refresh
-  is "a changed answer is sent before the next app" "$(jq -c .tune "$STUB_OUT/guest.in.json")" '{"fast":true,"trim":false}'
+  has "a job runs in the open window, through the agent" "$(cat "$STUB_OUT/requests")" 'hidden powershell.exe -NoProfile'
+  [[ ! -e $STUB_OUT/guest.args ]] && pass || fail "…without a connection of its own"
+  is "…carrying the changed answer" "$(jq -c .tune "$STUB_OUT/guest.in.json")" '{"fast":true,"trim":false}'
   console_free && pass || fail "a console that Windows says is free is remembered"
+  kill "$(cat "$STUB_OUT/client.pid")"
+  for _ in $(seq 50); do [[ -e $RUN_DIR/desktop.pid ]] || break; sleep 0.1; done
+
   "$WINAPP" stop >/dev/null 2>&1
   rm -f "$STUB_OUT/pkexec.calls" "$STUB_OUT/prime.runs"
   vm_up >/dev/null 2>&1
@@ -556,6 +455,20 @@ if group "sessions: the next app, and a start that does not wait"; then (
   is "a no is sent as something to undo" "$(tune_job)" '{"tune":{"fast":false,"trim":false}}'
   cmd_changes ask trim >/dev/null
   is "an open question leaves Windows as it is" "$(tune_job)" '{"tune":{"fast":false,"trim":null}}'
+
+  # an agent Windows cannot build
+  printf '{"agent":{"status":"failed: no compiler"}}\n' >"$STUB_OUT/guest.json"
+  cfg_edit 'del(.guestAgent)'
+  out=$("$WINAPP" desktop 2>&1)
+  agent_usable && fail "an agent that would not build is not used" || pass
+  rm -f "$STUB_OUT/guest.json"
+  touch "$HOME/Documents/a.docx"
+  "$WINAPP" add word --exe 'C:\Office\WINWORD.EXE' --name "Microsoft Word" --icon "$ROOT/tests/fixtures/icon.png" >/dev/null 2>&1
+  out=$("$WINAPP" word "$HOME/Documents/a.docx" 2>&1)
+  is "…so a file cannot be handed over" "$?" "1"
+  has "…and the message says where to look" "$out" "winapp doctor --deep"
+  kill "$(cat "$STUB_OUT/client.pid")" 2>/dev/null
+  for _ in $(seq 50); do [[ -e $RUN_DIR/desktop.pid ]] || break; sleep 0.1; done
   "$WINAPP" stop >/dev/null 2>&1
   exit $failed
 ); failed=$((failed + $?)); fi
@@ -729,10 +642,6 @@ if group "settings and failure messages"; then (
     exec_path() { echo "/home/some one/.local/bin/winapp"; }
     is "a launcher path that needs quoting is quoted when there is no other way" "$(exec_word)" '"/home/some one/.local/bin/winapp"'
   )
-  cfg_set helperWindowFix false
-  shim_wanted && fail "helperWindowFix: false switches the fix off" || pass
-  ensure_shim && fail "…and nothing is built then" || pass
-  cfg_set helperWindowFix true
 
   STUB_SCALE=1.6
   export STUB_SCALE
@@ -751,6 +660,9 @@ if group "setup and uninstall"; then (
   failed=0
   mkdir -p "$HOME/.local/bin"
   echo "an older script" >"$HOME/.local/bin/winapp"
+  omarchy=$XDG_DATA_HOME/applications/windows-vm.desktop
+  mkdir -p "${omarchy%/*}"
+  printf '[Desktop Entry]\nName=Windows\nExec=uwsm app -- omarchy-windows-vm launch\nIcon=/icons/windows.png\n' >"$omarchy"
   out=$("$WINAPP" setup --yes --no-scan 2>&1)
   is "setup succeeds" "$?" "0"
   is "the command is linked onto PATH" "$(realpath "$HOME/.local/bin/winapp")" "$WINAPP"
@@ -758,6 +670,12 @@ if group "setup and uninstall"; then (
   [[ -s $XDG_CONFIG_HOME/winapp/config.json && -s $XDG_CONFIG_HOME/winapp/apps.json ]] && pass || fail "setup writes the default settings"
   lacks "nothing is asked of polkit when Docker is reachable" "$out" "password"
   succeeds "setup can be run again" "$WINAPP" setup --yes --no-scan
+  entry=$(cat "$XDG_DATA_HOME/applications/winapp-desktop.desktop" 2>/dev/null)
+  has "Windows in the app launcher is winapp's" "$entry" $'Name=Windows\nComment'
+  has "…opening its window" "$entry" "Exec=$HOME/.local/bin/winapp desktop"
+  has "…with Omarchy's icon" "$entry" "Icon=/icons/windows.png"
+  has "Omarchy's own entry stays, renamed" "$(cat "$omarchy")" "Name=Omarchy Windows"
+  has "…and otherwise untouched" "$(cat "$omarchy")" "Exec=uwsm app -- omarchy-windows-vm launch"
 
   "$WINAPP" add demo --exe 'C:\\demo.exe' --ext qzx9 --icon "$ROOT/tests/fixtures/icon.png" >/dev/null 2>&1
   has "menu entries call the linked command" "$(cat "$XDG_DATA_HOME/applications/winapp-demo.desktop")" "Exec=$HOME/.local/bin/winapp demo %F"
@@ -766,6 +684,8 @@ if group "setup and uninstall"; then (
   [[ ! -e $HOME/.local/bin/winapp ]] && pass || fail "uninstall removes the link"
   [[ -z $(ls "$XDG_DATA_HOME/applications"/winapp-* 2>/dev/null) ]] && pass || fail "uninstall removes the menu entries"
   [[ ! -e $XDG_DATA_HOME/mime/packages/winapp-qzx9.xml ]] && pass || fail "uninstall removes the private file types"
+  has "uninstall gives Omarchy's entry its name back" "$(cat "$omarchy")" $'Name=Windows\n'
+
   [[ -s $XDG_CONFIG_HOME/winapp/apps.json ]] && pass || fail "uninstall keeps the app list"
   [[ -d $XDG_DATA_HOME/winapp/backup ]] && pass || fail "uninstall keeps the file setup moved aside"
   ln -s "$WINAPP" "$HOME/.local/bin/winapp"
@@ -848,7 +768,7 @@ COMPOSE
 ); failed=$((failed + $?)); fi
 
 # -------------------------------------------------------------------------------
-if group "shim: the helper-window fix"; then (
+if group "shim: the Super key and the pointer"; then (
   failed=0
   if ! command -v cc >/dev/null || [[ ! -e /usr/include/X11/Xlib.h ]]; then
     echo "  skipped: needs a C compiler and the X11 headers"
@@ -856,10 +776,10 @@ if group "shim: the helper-window fix"; then (
   fi
   build=$TMP/world/shim
   mkdir -p "$build"
-  succeeds "the shim compiles without warnings" cc -shared -fPIC -O2 -Wall -Wextra -Werror -o "$build/xshim.so" "$ROOT/shim/xshim.c" -ldl -lpthread
+  succeeds "the shim compiles without warnings" cc -shared -fPIC -O2 -Wall -Wextra -Werror -o "$build/xshim.so" "$ROOT/shim/xshim.c" -ldl
   succeeds "the test harness compiles" bash -c "cc -shared -fPIC -o '$build/libfakex.so' '$HERE/shim/fakex.c' && cc -o '$build/test' '$HERE/shim/test.c' -L'$build' -lfakex -Wl,-rpath,'$build'"
   out=$(LD_PRELOAD=$build/xshim.so "$build/test")
-  is "unmanaged windows are not focused or resized; ordinary ones are untouched" "$?:$out" "0:"
+  is "Super stays with the desktop; ordinary typing goes through" "$?:$out" "0:"
   if "$build/test" >/dev/null; then fail "the harness notices when the shim is not loaded"; else pass; fi
   out=$(WINAPP_SUPER=windows WINAPP_POINTER=200 LD_PRELOAD=$build/xshim.so "$build/test" settings)
   is "Super goes to Windows when asked, and the pointer is reduced on a scaled monitor" "$?:$out" "0:"

@@ -137,7 +137,7 @@ cmd_resources() {
     return 0
   fi
   if clients_alive || desktop_elsewhere; then
-    die "close the open Windows apps and desktop first: the change needs Windows to restart"
+    die "close the Windows window first (and save what is open in it): the change needs Windows to restart"
   fi
   ((HOST_RAM_GB - ${ram%G} >= 4)) || warn "that leaves under 4 GB for Linux while Windows is running"
 

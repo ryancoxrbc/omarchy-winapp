@@ -60,7 +60,7 @@ guest_prepared() { [[ $(cfg .guestPrepared "") == "$(vm_identity)" ]]; }
 guest_prepare() {
   local job
   job=$(pins_job | jq -c '{remoteapp: true, smbCache: true} + .')
-  frame_wanted && job=$(frame_job | jq -c --argjson job "$job" '$job + .')
+  job=$(agent_job | jq -c --argjson job "$job" '$job + .')
   job=$(tune_job | jq -c --argjson job "$job" '$job + .')
   guest_run apply "$job" 120 || return 1
   if [[ $(guest_out '.echo') != "$(cat "$GUEST_DIR/probe.txt")" ]]; then
@@ -69,8 +69,7 @@ guest_prepare() {
   fi
   tune_noted
   pins_noted
-  # cosmetic, so not a reason to call Windows unprepared; winapp doctor reports it
-  frame_wanted && { frame_noted || true; }
+  agent_noted || return 1
   cfg_set guestPrepared "$(vm_identity | jq -R .)"
 }
 
@@ -108,8 +107,8 @@ cmd_setup() {
   ensure_apps
   sync_desktop
   enable_plugin
-  if shim_wanted && ! ensure_shim; then
-    step "Could not build the helper-window fix (see: winapp doctor); apps still open without it"
+  if ! ensure_shim; then
+    step "Could not build the shim that keeps the Super key on Linux (see: winapp doctor)"
   fi
 
   if ! vm_installed; then
@@ -150,7 +149,7 @@ cmd_setup() {
   say "Done. Next:"
   say "  winapp manage     pick which Windows apps appear on Linux"
   say "  winapp share pick choose the folders Windows apps can open and save in"
-  say "  winapp desktop    open the Windows desktop to install more programs"
+  say "  winapp desktop    open Windows (the Windows entry in the app launcher)"
   say "  winapp doctor     check that everything works"
 }
 
@@ -166,7 +165,7 @@ cmd_uninstall() {
     esac
     shift
   done
-  clients_alive && die "close the open Windows apps first"
+  desktop_ours && die "close the Windows window first"
   confirm "Remove the Windows app menu entries, file associations and the winapp command? (the VM itself is not touched)" || die "cancelled"
   idle_cancel
 
@@ -176,9 +175,10 @@ cmd_uninstall() {
     forget_associations "${f##*/}"
   done
   rm -f "$MIME_DIR"/packages/winapp-*.xml
+  windows_entry_restore
   update-mime-database "$MIME_DIR" >/dev/null 2>&1
   update-desktop-database "$APP_DIR" >/dev/null 2>&1
-  step "Removed menu entries and file associations"
+  step "Removed menu entries and file associations; Omarchy's Windows entry has its name back"
 
   if [[ $(cfg .passwordless false) == true ]]; then
     if as_root rm -f "$POLKIT_RULE"; then step "Removed $POLKIT_RULE"; else warn "could not remove $POLKIT_RULE"; fi

@@ -3,73 +3,68 @@
 Start with `winapp doctor`. It checks each piece and prints the fix next to
 whatever fails. `winapp doctor --deep` also boots Windows and tests it from the
 inside: signing in, starting a program, reading and writing a Linux folder, and
-whether every app you added is still installed.
+whether every app you added is still installed, and building the agent that
+opens files in Windows.
 
 `winapp logs` prints the newest session log; all of them are in
 `~/.local/state/winapp/log/`.
 
-## An app does not open
+## An app or a file does not open
 
-**"Windows could not start C:\…"**
+**"Windows could not start C:\…"** (a box inside Windows)
 The program is not at that path any more, usually after an update moved it.
 `winapp scan` shows where it is now; `winapp add <id>` again picks that up.
 
-**"no window appeared"**
-The program started but never showed a window, or took more than three minutes
-to. Open it once from `winapp desktop` to see what it is waiting for: a licence
-dialog and a first-run wizard are the usual answers.
+**"Windows did not pick up the request"**
+The agent in Windows did not take it. Right after a cold start Windows may
+still be signing in: try again in a moment. Otherwise run
+`winapp doctor --deep`, which rebuilds the agent and says whether Windows
+would build it. The agent is started by the task `\winapp\winapp-agent` in
+Windows' Task Scheduler; a Windows window opened by something other than
+winapp has no folder for requests.
+
+**"Windows is open in Omarchy's own window…"**
+Omarchy's launcher (*Omarchy Windows*) is showing the desktop, and its window
+cannot be handed files. Close it and open the file again; it opens in
+winapp's *Windows* window.
 
 **"Windows did not accept a sign-in"**
 Windows is not ready. If it is still installing or updating, watch it at
 <http://127.0.0.1:8006>. If it is up, check that the account in
 `~/.config/windows/credentials` is the one you chose when installing the VM.
 
-**A window with a Windows sign-in prompt appears instead of the app**
-Someone is signed in on the VM's console, or Windows restarted while winapp
-thought it had that session. It normally notices and retries by itself; if you
-do see the prompt, close the window and open the app again.
+**The app opened, but behind another window**
+The agent brings the window whose title names the file to the front, or the
+first new window. A program that names its window differently, or takes more
+than 20 seconds to open it, is left where Windows put it: click it on
+Windows' taskbar.
 
 **The web console (port 8006) shows Windows' sign-in screen**
 You said yes to "Start Windows faster": nobody is signed in on the console, so
-that the first app does not have to wait for that. Sign in there with the
+that a cold start does not have to wait for that. Sign in there with the
 account in `~/.config/windows/credentials`, or use `winapp desktop`.
 `winapp changes deny fast` brings the old behaviour back.
 
-**The first app after starting Windows takes most of a minute**
-Windows signs in on its console, and the app waits for that. `winapp changes`
-shows whether you have agreed to switch that off; once you have, it takes
-effect the second time Windows starts.
+**Windows takes most of a minute to open after a cold start**
+Windows signs in on its console, and the window waits for that.
+`winapp changes` shows whether you have agreed to switch that off; once you
+have, it takes effect the second time Windows starts.
 
 **A Windows app cannot find or save to a folder**
 Only the folders you share reach Windows: `winapp shares` lists them and
 `winapp share pick` changes them. A file opened from anywhere else brings just
 its own folder along.
 
-**The app's window is black or white, says "Not Responding", and ignores the
-mouse; tiny extra windows may appear next to it.**
-This was CorelDRAW's welcome screen before 2.0.1, and can be any program with
-an embedded Internet Explorer control. Update the plugin, then check that
-`winapp doctor` says "helper-window fix built"; it needs a C compiler
-(`omarchy pkg add gcc`). To get out of a frozen app: `winapp stop`, then open
-it again.
-
-**The app stops reacting while Windows says nothing is wrong: no "Not
-Responding", keys, clicks and Super+W do nothing, and the window keeps an old
-size or shows a popup that will not go.**
-That is the FreeRDP client, not the app: version 3.32.2 deadlocks in RemoteApp
-sessions, often within minutes, and from then on nothing reaches Windows or
-comes back. The app itself carries on in Windows. winapp notices within 20
-seconds, drops the stuck connection and opens a new one to the same session,
-and the windows come back as they were; what was typed in those seconds is
-lost. `pacman -Q freerdp` shows the version. Going back to 3.31.1 avoids it:
+**The window stops reacting while Windows is fine: keys and clicks do
+nothing and the picture does not change.**
+Check `pacman -Q freerdp`. 3.32.0 to 3.32.2 deadlock in some cases (FreeRDP
+PR #13769 has the fix); 2.x hit this constantly with its window per app, and
+the one Windows window should not set it off, but if it does: close the
+window (`kill` its `xfreerdp3` if Super+W does not) and open Windows again;
+the apps in it are still running. Going back to 3.31.1 avoids it:
 `sudo pacman -U /var/cache/pacman/pkg/freerdp-2:3.31.1-1-x86_64.pkg.tar.zst`
 while it is still in the cache, with `IgnorePkg = freerdp` in
 `/etc/pacman.conf` until a fixed release is out.
-
-**"the Windows desktop is open…"**
-Windows shows either its desktop or single apps, not both at once. Close the
-desktop window (winapp's, or the one Omarchy's own *Windows* launcher opened)
-and open the app again.
 
 ## The VM
 
@@ -83,14 +78,15 @@ automatic stop rarer.
 Expected: the mounts between your home folder and the VM have to be recreated
 by root after a reboot.
 
-**It stops while I am still using it.**
-The idle timer only runs while no app window is open. A program that sits in
-the tray with no window counts as closed. Set a longer timeout in the panel, or
-`winapp idle 0` to stop it only by hand.
+**It stopped and an app I had open in Windows lost its work.**
+Closing the Windows window leaves its apps running, and the idle timer then
+stops Windows, apps and all; the notification that names what was still open
+says when. Set a longer timeout in the panel, or `winapp idle 0` to stop it
+only by hand.
 
 **It never stops.**
-Check `winapp status`. A window that is still open somewhere, on another
-workspace perhaps, keeps it up.
+Check `winapp status`. The Windows window, open on another workspace perhaps,
+keeps it up.
 
 ## Files
 
@@ -121,26 +117,10 @@ Set `"scale"` in `~/.config/winapp/config.json` to a percentage, for example
 Add your layout to `"rdpArgs"`, for example `["/kbd:layout:0x0407"]` for
 German. `xfreerdp3 /list:kbd` lists the ids.
 
-**An app still has its title bar and buttons.**
-Office and other programs that draw their own title bar keep it: it is part of
-the program, not something Windows adds. For a program with an ordinary Windows
-title bar, run `winapp doctor --deep`; it rebuilds the piece that removes it
-and says so if Windows would not. Dialogs keep their title on purpose.
-
-**I want the Windows title bar, or rounded corners, back.**
-Set `"titleBars": true` or `"roundedCorners": true` in
-`~/.config/winapp/config.json`, or `"titleBar": true` on one app in
-`apps.json`. Windows that are already open keep the look they have.
-
 **The Windows key does nothing in Windows.**
 That is deliberate: Super belongs to Omarchy's shortcuts, and passing it on
 made the Start menu open whenever you switched workspace. Ctrl+Esc opens the
 Start menu. `"superKey": "windows"` in `config.json` passes the key through.
-
-**Splash screens and tool windows tile.**
-They are ordinary windows to Hyprland. A window rule for the class `winapp`
-(for example, float everything that is not maximised) is the cure; app windows
-all carry that class.
 
 ## Starting over
 

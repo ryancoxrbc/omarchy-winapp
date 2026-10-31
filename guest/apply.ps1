@@ -6,8 +6,8 @@
 #   smbCache  true                         stop Windows caching the ~/Windows share's listings
 #   pin       ["\\tsclient\work", ...]     pin folders to Quick access, and unpin the redirected
 #                                          folders (\\tsclient\...) that are not in the list
-#   frame     {stamp, titleBars, roundedCorners, keep[]}
-#                                          build the program apps are started through, and its settings
+#   agent     {stamp}                      build the program that opens apps in the desktop session,
+#                                          and have it started at every sign-in and connection
 #   tune      {fast, trim}                 no sign-in on the console at boot; search indexer and Widgets off.
 #                                          Each is true (do it), false (undo it) or null (leave Windows as it is)
 # The result always reports the Windows version and the RemoteApp policy.
@@ -186,36 +186,52 @@ if ($null -ne $job.pin) {
   $result.pinned = $pinned
 }
 
-if ($job.frame) {
-  # winapp-frame.exe (frame.cs, sent along with this job) takes the Windows
-  # title bar and rounded corners off app windows. It is compiled here, once
-  # per version, by the compiler Windows carries; it does nothing unless winapp
-  # starts an app through it.
-  $frame = [ordered]@{}
+if ($job.agent) {
+  # winapp-agent.exe (agent.cs, sent along with this job) opens what winapp
+  # asks for in the Windows desktop. It is compiled here, once per version, by
+  # the compiler Windows carries, and a scheduled task starts it in the session
+  # at every sign-in and every time a Remote Desktop connection reaches it.
+  $agent = [ordered]@{}
   try {
     $dir = Join-Path $env:ProgramData 'winapp'
-    $exe = Join-Path $dir 'winapp-frame.exe'
-    $stamp = Join-Path $dir 'frame.stamp'
+    $exe = Join-Path $dir 'winapp-agent.exe'
+    $stamp = Join-Path $dir 'agent.stamp'
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $built = (Test-Path -LiteralPath $exe) -and (Test-Path -LiteralPath $stamp) -and
-      ([IO.File]::ReadAllText($stamp).Trim() -eq [string]$job.frame.stamp)
+      ([IO.File]::ReadAllText($stamp).Trim() -eq [string]$job.agent.stamp)
     if (-not $built) {
-      Get-Process -Name 'winapp-frame' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+      Get-Process -Name 'winapp-agent' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
       Start-Sleep -Milliseconds 300
       Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue
-      $source = [IO.File]::ReadAllText((Join-Path $share 'frame.cs'), $utf8)
+      $source = [IO.File]::ReadAllText((Join-Path $share 'agent.cs'), $utf8)
       Add-Type -TypeDefinition $source -OutputAssembly $exe -OutputType WindowsApplication
-      [IO.File]::WriteAllText($stamp, [string]$job.frame.stamp, $utf8)
+      [IO.File]::WriteAllText($stamp, [string]$job.agent.stamp, $utf8)
     }
-    $lines = @(
-      "titleBars=$([int][bool]$job.frame.titleBars)"
-      "roundedCorners=$([int][bool]$job.frame.roundedCorners)"
-      "keep=$(@($job.frame.keep | Where-Object { $_ }) -join ';')"
-    )
-    [IO.File]::WriteAllLines((Join-Path $dir 'frame.conf'), [string[]]$lines, $utf8)
-    $frame.status = 'ok'
-  } catch { $frame.status = "failed: $($_.Exception.Message)" }
-  $result.frame = $frame
+    # winapp before 3.0 started apps through winapp-frame.exe
+    Get-Process -Name 'winapp-frame' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    foreach ($old in 'winapp-frame.exe', 'frame.stamp', 'frame.conf') {
+      Remove-Item -LiteralPath (Join-Path $dir $old) -Force -ErrorAction SilentlyContinue
+    }
+
+    $user = "$env:USERDOMAIN\$env:USERNAME"
+    $logon = New-ScheduledTaskTrigger -AtLogOn -User $user
+    $class = Get-CimClass -Namespace 'Root/Microsoft/Windows/TaskScheduler' -ClassName MSFT_TaskSessionStateChangeTrigger
+    $connect = New-CimInstance -CimClass $class -ClientOnly -Property @{
+      Enabled = $true; StateChange = [uint32]3 <# a remote connection #>; UserId = $user
+    }
+    $action = New-ScheduledTaskAction -Execute $exe
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+      -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
+    Register-ScheduledTask -TaskPath '\winapp\' -TaskName 'winapp-agent' -Trigger @($logon, $connect) `
+      -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+
+    # A job run in the desktop goes through the agent, which a rebuild has
+    # just stopped: start it again here. (One copy per session; a second exits.)
+    if (Test-Path -LiteralPath '\\tsclient\winappq') { Start-Process -FilePath $exe }
+    $agent.status = 'ok'
+  } catch { $agent.status = "failed: $($_.Exception.Message)" }
+  $result.agent = $agent
 }
 
 if ($null -ne $job.tune) {

@@ -7,34 +7,61 @@ mapfile -t args
 # A job for inside the VM (lib/guest.sh) comes with a folder to answer in.
 # Answer as Windows would: with $STUB_OUT/guest.json when a test put one
 # there, and otherwise with everything having gone well.
-job=""
-for arg in "${args[@]}"; do
-  [[ $arg == /drive:winapp,* ]] && job=${arg#/drive:winapp,}
-done
-if [[ -n $job ]]; then
-  printf '%s\n' "${args[@]}" >"$out/guest.args"
+answer_job() { # answer_job <folder>
+  local job=$1
   [[ -e $job/in.json ]] && cp -- "$job/in.json" "$out/guest.in.json"
   echo run >>"$out/guest.runs"
   if [[ -e $out/guest.json ]]; then
     cp -- "$out/guest.json" "$job/out.json"
   else
-    printf '{"frame":{"status":"ok"},"echo":"%s"}\n' "$(cat "$job/probe.txt")" >"$job/out.json"
+    printf '{"agent":{"status":"ok"},"echo":"%s"}\n' "$(cat "$job/probe.txt")" >"$job/out.json"
   fi
-  echo "[INFO] Logon Extended Info [cookie: TRUE, LogonId: 4, errorInfo: FALSE]"
   : >"$job/done"
+}
+
+job="" queue=""
+for arg in "${args[@]}"; do
+  case $arg in
+  /drive:winapp,*) job=${arg#/drive:winapp,} ;;
+  /drive:winappq,*) queue=${arg#/drive:winappq,} ;;
+  esac
+done
+
+if [[ -n $job && -z $queue ]]; then
+  # a job of its own, as a hidden RemoteApp
+  printf '%s\n' "${args[@]}" >"$out/guest.args"
+  answer_job "$job"
+  echo "[INFO] Logon Extended Info [cookie: TRUE, LogonId: 4, errorInfo: FALSE]"
 else
   printf '%s\n' "$*" >"$out/client.argv"
   printf '%s\n' "${LD_PRELOAD:-}" >"$out/client.preload"
   printf '%s\n' "${WINAPP_SUPER:-}" >"$out/client.super"
   printf '%s\n' "${WINAPP_POINTER:-}" >"$out/client.pointer"
   printf '%s\n' "${args[@]}" >"$out/client.args"
-  [[ ${args[0]:-} == *.rdp ]] && cp -- "${args[0]}" "$out/launch.rdp"
   echo $$ >"$out/client.pid"
   echo "[INFO] Logon Extended Info [cookie: TRUE, LogonId: 4, errorInfo: FALSE]"
   [[ -e $out/client.fail ]] && { cat "$out/client.fail"; exit 1; }
+  if [[ -n $queue ]]; then
+    # the desktop: the agent in Windows takes what is asked for, unless a
+    # test has switched it off
+    (
+      while sleep 0.05; do
+        [[ -e $out/agent-off ]] && continue
+        for request in "$queue"/*.req; do
+          [[ -e $request ]] || continue
+          mv "$request" "$request.taken" 2>/dev/null || continue
+          { read -r kind; read -r line; } <"$request.taken"
+          rm -f "$request.taken"
+          printf '%s %s\n' "$kind" "$line" >>"$out/requests"
+          [[ $kind == hidden && -n $job ]] && answer_job "$job"
+        done
+      done
+    ) &
+    agent=$!
+  fi
 fi
 # not exec: the process has to keep this script's name, which is how winapp
 # tells its own clients from anything else
 sleep 600 &
-trap 'kill $! 2>/dev/null; exit 143' TERM
+trap 'kill $! ${agent:-} 2>/dev/null; exit 143' TERM
 wait $!

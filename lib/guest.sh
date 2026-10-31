@@ -1,19 +1,19 @@
 # shellcheck shell=bash
-# Running something inside the VM. There is no guest agent: a job is a
-# PowerShell script started as a hidden RemoteApp, handed a redirected folder
-# (\\tsclient\winapp) to read its input from and write its results to.
+# Running something inside the VM. A job is a PowerShell script, handed a
+# redirected folder (\\tsclient\winapp) to read its input from and write its
+# results to. While the Windows window is open the agent in it starts the job
+# (a hidden request, lib/launch.sh); otherwise it runs as a hidden RemoteApp
+# of its own, which is how Windows is first prepared, before there is an agent.
 
 GUEST_DIR=$RUN_DIR/guest
 GUEST_ERROR=""
 GUEST_BUMPED=0
-SESSION_IN_USE="close the open Windows apps and desktop first (this needs the VM's only session)"
+SESSION_IN_USE="close Omarchy's own Windows window first (winapp cannot reach into it)"
+GUEST_COMMAND='powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File \\tsclient\winapp\run.ps1'
 
 # guest_run <job> [input json] [timeout seconds]
 # Runs guest/<job>.ps1 and leaves its results in $GUEST_DIR (out.json, icons/).
 # Returns non-zero with GUEST_ERROR set when it could not.
-#
-# A job is one more logon, and a logon takes the Windows session (and every
-# window in it) away from an app that is open, so it refuses while one is.
 guest_run() {
   guest_run_once "$@" && return 0
   # refused because the console turned out to be signed in: that session has
@@ -21,42 +21,67 @@ guest_run() {
   ((GUEST_BUMPED)) && guest_run_once "$@"
 }
 
+# The folder stays: the desktop's connection redirects it for as long as it is
+# open. Only what is in it is replaced.
+guest_files() { # guest_files <job> [input json]
+  mkdir -p "$GUEST_DIR"
+  find "$GUEST_DIR" -mindepth 1 -delete 2>/dev/null
+  cp "$ROOT/guest/run.ps1" "$GUEST_DIR/run.ps1"
+  cp "$ROOT/guest/$1.ps1" "$GUEST_DIR/job.ps1"
+  cp "$ROOT/guest/agent.cs" "$GUEST_DIR/agent.cs" # what the apply job builds, when asked to
+  [[ -n ${2:-} ]] && printf '%s' "$2" >"$GUEST_DIR/in.json"
+  printf '%s\n' "$RANDOM$RANDOM" >"$GUEST_DIR/probe.txt"
+}
+
+guest_wait() { # guest_wait <timeout seconds> [client pid]
+  local i
+  for ((i = 0; i < $1 * 2; i++)); do
+    [[ -e $GUEST_DIR/done ]] && return 0
+    if [[ -n ${2:-} ]]; then kill -0 "$2" 2>/dev/null || return 1; else desktop_ours || return 1; fi
+    sleep 0.5
+  done
+  return 1
+}
+
 guest_run_once() {
-  local job=$1 input=${2:-} timeout=${3:-120} log i
+  local job=$1 input=${2:-} timeout=${3:-120} log
   local -a drives
   GUEST_ERROR="" GUEST_BUMPED=0
-  if clients_alive || desktop_elsewhere; then
+  if desktop_elsewhere; then
     GUEST_ERROR=$SESSION_IN_USE
     return 1
   fi
-  vm_up "Windows is needed for a moment."
-  rm -rf "$GUEST_DIR"
-  mkdir -p "$GUEST_DIR"
-  cp "$ROOT/guest/run.ps1" "$GUEST_DIR/run.ps1"
-  cp "$ROOT/guest/$job.ps1" "$GUEST_DIR/job.ps1"
-  cp "$ROOT/guest/frame.cs" "$GUEST_DIR/frame.cs" # what the apply job builds, when asked to
-  [[ -n $input ]] && printf '%s' "$input" >"$GUEST_DIR/in.json"
-  printf '%s\n' "$RANDOM$RANDOM" >"$GUEST_DIR/probe.txt"
-  log=$(new_log guest)
-  mapfile -t drives < <(drive_args)
-  rdp_spawn xfreerdp3 "$log" "" "/drive:winapp,$GUEST_DIR" "${drives[@]}" /wm-class:winapp-helper "/title:winapp" \
-    '/app:program:powershell.exe,cmd:-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File \\tsclient\winapp\run.ps1'
-  for ((i = 0; i < timeout * 2; i++)); do
-    [[ -e $GUEST_DIR/done ]] && break
-    kill -0 "$RDP_PID" 2>/dev/null || break
-    sleep 0.5
-  done
-  kill "$RDP_PID" 2>/dev/null
-  wait "$RDP_PID" 2>/dev/null
-  RDP_PID=""
-  clients_alive || idle_arm
+  if desktop_ours; then
+    if ! agent_usable; then
+      GUEST_ERROR="close the Windows window first: winapp's agent is not set up in it yet"
+      return 1
+    fi
+    guest_files "$job" "$input"
+    if ! request hidden "$GUEST_COMMAND" 10; then
+      GUEST_ERROR="the agent in the Windows window did not take the job"
+      return 1
+    fi
+    guest_wait "$timeout"
+  else
+    vm_up "Windows is needed for a moment."
+    guest_files "$job" "$input"
+    log=$(new_log guest)
+    mapfile -t drives < <(drive_args)
+    rdp_spawn xfreerdp3 "$log" "" "/drive:winapp,$GUEST_DIR" "${drives[@]}" /wm-class:winapp-helper "/title:winapp" \
+      "/app:program:powershell.exe,cmd:${GUEST_COMMAND#powershell.exe }"
+    guest_wait "$timeout" "$RDP_PID"
+    kill "$RDP_PID" 2>/dev/null
+    wait "$RDP_PID" 2>/dev/null
+    RDP_PID=""
+    clients_alive || idle_arm
+  fi
   if [[ ! -e $GUEST_DIR/done ]]; then
-    if [[ $(rdp_failure "$log") == bump ]]; then
+    if [[ -n ${log:-} && $(rdp_failure "$log") == bump ]]; then
       console_taken
       GUEST_BUMPED=1
       GUEST_ERROR="Windows was restarted; try again"
     else
-      GUEST_ERROR="the job did not finish inside the VM (log: $log)"
+      GUEST_ERROR="the job did not finish inside the VM${log:+ (log: $log)}"
     fi
     return 1
   fi
@@ -84,7 +109,7 @@ guest_out() { # guest_out [jq options] <filter>: read the last job's result
 # A setting that is true is applied, false is undone, and one that is not
 # there has not been decided: Windows is left as it is, and the question is
 # put (changes_ask). What every install needs (RemoteApp for any program, the
-# share's cache, the frame program) is not asked; `winapp changes` lists it.
+# share's cache, the agent) is not asked; `winapp changes` lists it.
 CHANGES=(fast trim)
 
 change_key() {
@@ -103,8 +128,8 @@ change_title() {
 
 change_text() {
   case $1 in
-  fast) echo "Windows signs in on the VM's own console at every start, on a desktop nobody looks at, and the first app waits half a minute for that. With that sign-in switched off, an app opens about 13 seconds after a cold start instead of 40. The web console on port 8006 then shows Windows' sign-in screen." ;;
-  trim) echo "Neither is of use to an app shown on its own, and both run in the background after every start. This leaves the VM's processors and disk alone; it does not make apps open faster." ;;
+  fast) echo "Windows signs in on the VM's own console at every start, and connecting has to wait half a minute for that. With that sign-in switched off, Windows opens about 13 seconds after a cold start instead of 40. The web console on port 8006 then shows Windows' sign-in screen." ;;
+  trim) echo "Both run in the background after every start. Switching them off leaves the VM's processors and disk alone; it does not make Windows open faster, and Start menu search still finds programs." ;;
   esac
 }
 
@@ -191,7 +216,7 @@ cmd_changes() { # winapp changes [allow|deny|ask <name>]
     [[ " ${CHANGES[*]} " == *" $name "* && -n $name ]] || die "usage: winapp changes [allow|deny|ask] <${CHANGES[*]}>"
     case $action in allow) state=yes ;; deny) state=no ;; *) state=ask ;; esac
     change_set "$name" "$state" || die "could not update $CONFIG_FILE"
-    say "$(change_title "$name"): $state. It reaches Windows with the next app opened while no other is open."
+    say "$(change_title "$name"): $state. It reaches Windows the next time the Windows window is opened."
     return 0
     ;;
   "") ;;
@@ -207,11 +232,12 @@ cmd_changes() { # winapp changes [allow|deny|ask <name>]
     change_text "$name" | fold -s -w 70 | sed 's/^/                     /'
   done
   say ""
-  say "Always, because apps do not work without them:"
-  say "  RemoteApp may start any program, not only listed ones"
+  say "Always, because winapp does not work without them:"
+  say "  RemoteApp may start any program (how Windows is first prepared)"
   say "  the ~/Windows share shows Linux-side changes at once (no listing cache)"
   say "  your shared folders are pinned to Quick access"
-  say "  a small program (winapp-frame.exe) starts apps and tidies window frames"
+  say "  a small program (winapp-agent.exe), started at sign-in by a scheduled task,"
+  say "  opens the files and apps you ask for from Linux"
   say ""
   if interactive && have gum; then
     for name in "${CHANGES[@]}"; do
@@ -273,22 +299,19 @@ console_taken() {
   return 0
 }
 
-# Before an app is started: bring the VM's copy of the frame program and its
-# settings up to date when that can be done now, and do without, quietly, when
-# it cannot. A job is a logon of its own, so the session has to be free
-# (guest_run says so when it is not; nothing is recorded then, and the next
-# launch from cold tries again).
+# Before the Windows window is opened: bring the VM's copy of the agent and
+# the settings up to date when that can be done now, and do without, quietly,
+# when it cannot (nothing is recorded then, and the next opening tries again).
 standing_refresh() {
   local job='{}'
-  if frame_wanted && ! frame_current; then job=$(frame_job); fi
+  agent_current || job=$(agent_job)
   tune_current || job=$(tune_job | jq -c --argjson job "$job" '$job + .')
   pins_current || job=$(pins_job | jq -c --argjson job "$job" '$job + .')
   [[ $job != '{}' ]] || return 0
-  clients_alive && return 0
   if guest_run apply "$job" 120; then
-    [[ $(jq 'has("frame")' <<<"$job") == true ]] && { frame_noted || true; }
+    [[ $(jq 'has("agent")' <<<"$job") == true ]] && { agent_noted || true; }
     [[ $(jq 'has("tune")' <<<"$job") == true ]] && tune_noted
     [[ $(jq 'has("pin")' <<<"$job") == true ]] && pins_noted
   fi
-  idle_cancel # the job armed the idle timer, and an app is about to open
+  idle_cancel # the job armed the idle timer, and Windows is about to open
 }

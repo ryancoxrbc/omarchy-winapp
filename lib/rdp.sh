@@ -42,25 +42,22 @@ compose_value() {
   printf '%s' "$v"
 }
 
-# --- the helper-window fix ---------------------------------------------------
-# shim/xshim.c explains what it corrects in xfreerdp and why: without it,
-# programs with an embedded Internet Explorer control (CorelDRAW's welcome
-# screen) freeze, at start-up or some time later. It is a few lines of C
-# loaded into the client, so it is built here, from the source in the plugin,
-# the first time it is needed and again whenever that source changes.
+# --- the shim ------------------------------------------------------------------
+# shim/xshim.c keeps the Super key with the desktop and sizes Windows' mouse
+# pointer for a scaled monitor. It is a few lines of C loaded into the client,
+# so it is built here, from the source in the plugin, the first time it is
+# needed and again whenever that source changes.
 SHIM_SOURCE=$ROOT/shim/xshim.c
 SHIM=$DATA_DIR/xshim.so
 
-shim_wanted() { [[ $(cfg_json | jq -r '.helperWindowFix') != false ]]; }
-
-# True when the fix is built and current. Does without, quietly, when there is
-# no C compiler: apps still open, minus the fix (`winapp doctor` says so).
+# True when the shim is built and current. Does without, quietly, when there
+# is no C compiler: Windows still opens, minus both (`winapp doctor` says so).
 ensure_shim() {
-  shim_wanted && [[ -f $SHIM_SOURCE ]] || return 1
+  [[ -f $SHIM_SOURCE ]] || return 1
   [[ -s $SHIM && ! $SHIM_SOURCE -nt $SHIM ]] && return 0
   have cc || return 1
   mkdir -p "$DATA_DIR"
-  if cc -shared -fPIC -O2 -o "$SHIM.$$" "$SHIM_SOURCE" -ldl -lpthread 2>/dev/null; then
+  if cc -shared -fPIC -O2 -o "$SHIM.$$" "$SHIM_SOURCE" -ldl 2>/dev/null; then
     mv -f "$SHIM.$$" "$SHIM"
   else
     rm -f "$SHIM.$$"
@@ -121,8 +118,8 @@ pointer_percent() {
   [[ $percent =~ ^[0-9]+$ ]] && ((percent > 100)) && echo "$percent"
 }
 
-# Arguments every visible session shares: the redirected folders, scaling,
-# and whatever the user added under "rdpArgs" in config.json.
+# The desktop's arguments: the redirected folders, scaling, and whatever the
+# user added under "rdpArgs" in config.json.
 session_args() {
   drive_args
   scale_args
