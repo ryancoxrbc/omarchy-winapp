@@ -123,7 +123,11 @@ pointer_percent() {
 session_args() {
   drive_args
   scale_args
-  printf '%s\n' -grab-keyboard +clipboard /sound /gfx:AVC444
+  # RemoteFX, not H.264 (AVC444): the VM has no GPU, so Windows encodes H.264
+  # on its CPUs, and while the window sits unwatched it kept streaming a still
+  # screen at all three cores. RemoteFX is far cheaper to produce; on a local
+  # link its higher bandwidth costs nothing.
+  printf '%s\n' -grab-keyboard +clipboard /sound /gfx:RFX
   cfg_json | jq -r '.rdpArgs[]? | select(type == "string" and . != "")'
 }
 
