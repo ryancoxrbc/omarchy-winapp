@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Windows ran out of memory after copying on Linux. When Xwayland refused to
+  say what the clipboard held, xfreerdp told Windows the clipboard had changed
+  and asked again, thousands of times a second; Windows' `rdpclip.exe` grew
+  until sign-ins failed and Windows could not shut down. The shim now absorbs
+  the refusal. A FreeRDP bug, reported upstream.
+- The window no longer keeps the VM's processors busy while nobody looks at
+  it: Windows sends it as RemoteFX instead of H.264.
+
 ## 3.0.0 - 2026-10-31
 
 ### Changed

@@ -1,8 +1,9 @@
 /*
  * winapp-xshim: corrections to how FreeRDP's X11 client (xfreerdp) behaves on
  * a tiling Wayland desktop. winapp loads it into the client with LD_PRELOAD;
- * nothing else is affected. There are two: what the client does with the
- * Super key, and how large it shows the mouse pointer.
+ * nothing else is affected. There are three: what the client does with the
+ * Super key, how large it shows the mouse pointer, and a clipboard loop
+ * (refused_targets, below).
  *
  * (Before 3.0, winapp showed each Windows app in a window of its own, and
  * this also corrected what xfreerdp did to Windows' hidden helper windows.
@@ -96,6 +97,26 @@ Bool XQueryPointer(Display* display, Window window, Window* root, Window* child,
 	return rc;
 }
 
+/* True when the owner of the clipboard has just refused to say what it holds.
+ * xfreerdp answers that refusal by telling Windows the clipboard changed and
+ * asking the owner again, at once. Xwayland can go on refusing, and the two
+ * then loop thousands of times a second, each turn a message to Windows'
+ * rdpclip.exe, which grows until Windows runs out of memory. Without the
+ * refusal the client just waits for the next real change. */
+static int refused_targets(Display* display, const XSelectionEvent* selection)
+{
+	static Display* known;
+	static Atom targets;
+	if (selection->property != None)
+		return 0;
+	if (known != display)
+	{
+		targets = XInternAtom(display, "TARGETS", False);
+		known = display;
+	}
+	return selection->target == targets;
+}
+
 int XNextEvent(Display* display, XEvent* event)
 {
 	static int (*real)(Display*, XEvent*);
@@ -106,6 +127,10 @@ int XNextEvent(Display* display, XEvent* event)
 	 * one: it is turned into a kind the client has no handler for. */
 	if ((event->type == KeyPress || event->type == KeyRelease) && keeps_super() &&
 	         belongs_to_desktop(&event->xkey))
+	{
+		event->type = GravityNotify;
+	}
+	else if (event->type == SelectionNotify && refused_targets(display, &event->xselection))
 	{
 		event->type = GravityNotify;
 	}
