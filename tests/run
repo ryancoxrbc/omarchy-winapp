@@ -342,7 +342,13 @@ if group "launch: Windows in a window, and files opened in it"; then (
   for _ in $(seq 50); do [[ -e $RUN_DIR/desktop.pid ]] || break; sleep 0.1; done
   state=$("$WINAPP" state)
   is "closing the window is seen" "$(jq -r .desktop <<<"$state")" "false"
-  has "…and what was still open in it is named" "$(cat "$STUB_OUT/desktop.calls" 2>/dev/null)" "Still open in Windows Sam &amp; co.docx - Word"
+  [[ $(cat "$STUB_OUT/desktop.calls" 2>/dev/null) != *"Still open"* ]] && pass ||
+    fail "…with Windows able to sleep, nothing is said: sleeping loses nothing"
+  (
+    can_sleep() { return 1; }
+    still_open_warning
+  )
+  has "…where it can only be shut down, what was still open is named" "$(cat "$STUB_OUT/desktop.calls" 2>/dev/null)" "Still open in Windows Sam &amp; co.docx - Word"
   has "…with when Windows will stop" "$(cat "$STUB_OUT/desktop.calls" 2>/dev/null)" "after 5 idle minutes"
   [[ $(jq -r .idleDeadline <<<"$state") -gt $(date +%s) ]] && pass || fail "…and starts the idle countdown" "$state"
   succeeds "stop" "$WINAPP" stop
@@ -596,32 +602,31 @@ if group "settings and failure messages"; then (
   refuses "idle wants a number" "$WINAPP" idle soon
   "$WINAPP" idle 5
 
-  # cold or warm
-  is "the mode is cold unless chosen" "$("$WINAPP" state | jq -r .mode)" "cold"
-  [[ ! -e $STUB_OUT/pkexec.calls ]] && pass || fail "…and cold, asking for the state starts nothing"
-  refuses "mode wants cold or warm" "$WINAPP" mode lukewarm
-  "$WINAPP" mode warm
-  for _ in $(seq 100); do [[ $("$WINAPP" state | jq -r .vm) == running ]] && break; sleep 0.1; done
+  # sleep: the VM is paused, and whatever opens Windows next wakes it
+  refuses "sleep wants a running Windows" "$WINAPP" sleep
+  "$WINAPP" start
+  is "started" "$("$WINAPP" state | jq -r .vm)" "running"
+  is "…and able to sleep with Docker at hand" "$("$WINAPP" state | jq -r .canSleep)" "true"
+  succeeds "sleep" "$WINAPP" sleep
   state=$("$WINAPP" state)
-  is "choosing warm starts Windows" "$(jq -r .vm <<<"$state")" "running"
-  is "…state says warm" "$(jq -r .mode <<<"$state")" "warm"
-  is "…and nothing stops it when idle" "$(jq -r '"\(.idleMinutes) \(.idleDeadline)"' <<<"$state")" "0 0"
-  has "mode says what warm costs" "$("$WINAPP" mode)" "holds its memory"
-  for _ in $(seq 50); do pgrep -f "$WINAPP start" >/dev/null || break; sleep 0.1; done
+  is "…leaves it asleep" "$(jq -r .vm <<<"$state")" "asleep"
+  is "…with no idle countdown" "$(jq -r .idleDeadline <<<"$state")" "0"
+  has "…by pausing the VM" "$(cat "$STUB_OUT/docker.calls")" "docker pause omarchy-windows"
+  succeeds "asleep, a second sleep is nothing to do" "$WINAPP" sleep
+  refuses "asleep, the memory cannot change under its open apps" "$WINAPP" resources --ram 6 --cores 2
+  ups=$(grep -c ' up -d' "$STUB_OUT/docker.calls")
+  "$WINAPP" start
+  is "start wakes it" "$("$WINAPP" state | jq -r .vm)" "running"
+  has "…by unpausing" "$(cat "$STUB_OUT/docker.calls")" "docker unpause omarchy-windows"
+  is "…not by booting again" "$(grep -c ' up -d' "$STUB_OUT/docker.calls")" "$ups"
+  "$WINAPP" sleep
+  rm -f "$STUB_OUT/docker.calls"
   "$WINAPP" stop
-  rm -f "$STUB_OUT/pkexec.calls"
-  "$WINAPP" state >/dev/null
-  [[ ! -e $STUB_OUT/pkexec.calls ]] && pass || fail "stopped by hand, it stays stopped for this login"
-  rm -f "$RUN_DIR/warmed" # a new login
-  "$WINAPP" state >/dev/null
-  for _ in $(seq 100); do [[ -e $STUB_OUT/vm-running ]] && break; sleep 0.1; done
-  [[ -e $STUB_OUT/vm-running ]] && pass || fail "warm, the bar's first question after login starts Windows"
-  for _ in $(seq 100); do [[ $("$WINAPP" state | jq -r .vm) == running ]] && break; sleep 0.1; done
-  for _ in $(seq 50); do pgrep -f "$WINAPP start" >/dev/null || break; sleep 0.1; done
-  "$WINAPP" mode cold
-  [[ $("$WINAPP" state | jq -r .idleDeadline) -gt $(date +%s) ]] && pass || fail "back to cold, an unused Windows is on the idle timer again"
-  "$WINAPP" stop
-  "$WINAPP" idle 0
+  is "stop shuts down a sleeping Windows" "$("$WINAPP" state | jq -r .vm)" "stopped"
+  calls=$(grep -n -E 'docker unpause|compose.* down' "$STUB_OUT/docker.calls" | cut -d: -f2- | tr '\n' '|')
+  has "…waking it first to hear the shutdown" "$calls" "docker unpause omarchy-windows|docker-compose"
+  refuses "mode is gone" "$WINAPP" mode warm
+  has "…and says what replaced it" "$("$WINAPP" mode 2>&1)" "sleeps when idle"
 
   rdp_credentials
   is "the password keeps its = and quotes" "$RDP_PASS" 'p=ss w"rd'

@@ -40,10 +40,12 @@ Apps
   winapp sync                  rebuild menu entries after editing apps.json by hand
 
 Windows
-  winapp start | stop          boot the VM without an app / shut it down now
-  winapp mode [cold|warm]      cold: start Windows for an app, stop it when idle
-                               warm: start it at login and keep it, for instant apps
-  winapp idle <minutes>        stop the VM this long after the window closes (0 = never)
+  winapp start                 start (or wake) Windows without opening its window
+  winapp sleep                 close the window and pause Windows: apps and unsaved
+                               work stay as they are, in memory; the next app wakes it
+  winapp stop                  shut Windows down, which frees its memory
+  winapp idle <minutes>        put Windows to sleep this long after the window
+                               closes (0 = never)
   winapp resources [--ram <GB>] [--cores <n>]
                                show, or change, the VM's memory and processors
   winapp status                what the VM is doing
@@ -113,7 +115,8 @@ state) cmd_state ;;
 status) cmd_status ;;
 start) cmd_start ;;
 stop) cmd_stop ;;
-mode) cmd_mode "${2:-}" ;;
+sleep) cmd_sleep ;;
+mode) die "winapp mode is gone: Windows starts when you open something and sleeps when idle (winapp idle <minutes>)" ;;
 idle) cmd_idle "${2:-}" ;;
 resources) shift; cmd_resources "$@" ;;
 shares) cmd_shares ;;

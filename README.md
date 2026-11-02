@@ -25,11 +25,12 @@ plugin turns that VM into a source of apps:
   types. Around 40 common programs are recognised by name; everything else
   works too.
 - **The VM looks after itself.** It boots when you open an app or a file
-  (about 15 seconds cold; under a second once the window is open) and shuts
-  down a few minutes after you close its window, so it is not holding memory
-  while you are not using it.
-- **A bar widget** shows whether Windows is running and what it is doing, opens
-  apps, and starts or stops the VM.
+  (about 15 seconds from off; under a second once the window is open) and goes
+  to sleep a few minutes after you close its window: paused, using no
+  processor, with your apps and unsaved work as you left them. It wakes in
+  seconds. Shut it down when you want its memory back.
+- **A bar widget** shows whether Windows is on, asleep or off, opens apps, and
+  turns it on, puts it to sleep or shuts it down.
 
 ## Install
 
@@ -148,15 +149,16 @@ Click the Windows icon in the bar, or bind a key to
 
 | | |
 |---|---|
-| The switch | Start or stop the VM. Stopping asks first: apps in Windows keep running when its window is closed. |
+| On | Shown while Windows is off or asleep: starts or wakes it, and opens its window. |
+| Sleep | Pauses Windows. It keeps its RAM, uses no processor, and comes back in seconds with your apps as you left them. |
+| Shut down | Frees the RAM. Asks first: apps in Windows keep running when its window is closed, and anything not saved in them is lost. |
 | An app | Open it in the Windows window. Boots Windows first if needed. |
 | Windows | The Windows window: opens it, or brings it forward. |
 | Add or remove apps | The checklist of installed programs. |
 | Memory and processors | How much of this computer Windows gets. |
 | Shared folders | Tick the folders Windows apps can open and save in. |
 | Changes to Windows | Shown while winapp has a question for you about an optional change inside Windows. `winapp changes` lists them all at any time. |
-| Stop when idle for | Cold only: how long the VM stays up after the Windows window closes. |
-| Start-up | **Cold**: Windows starts when you open an app (about 15 seconds) and stops when idle, so it uses no memory in between. **Warm**: Windows starts when you log in and stays on, so the window opens in a few seconds; it holds its memory (16 GB, say) all the time, in use or not. |
+| Sleep when idle for | How long Windows stays awake after its window closes. Without sudoless Docker it cannot sleep, and this shuts it down instead. |
 
 Keyboard: `↑` `↓` or `j` `k` to move, `Enter` to activate, `←` `→` on the idle
 row, `d` for the Windows window, `a` to add apps, `m` for memory and processors, `r` to
@@ -203,9 +205,8 @@ winapp scan [text]           list what is installed in Windows
 winapp add <id> [options]    add a program        winapp remove <id>
 winapp apps                  list your apps       winapp icons   refetch icons
 
-winapp start | stop | status
-winapp mode [cold|warm]      start Windows for an app, or keep it on from login
-winapp idle <minutes>        0 = never stop by itself
+winapp start | sleep | stop | status
+winapp idle <minutes>        sleep after this long idle; 0 = never
 winapp resources [--ram <GB>] [--cores <n>]   the VM's memory and processors
 winapp shares | share add <name> <folder> | share remove <name>
 
@@ -220,8 +221,7 @@ winapp setup | doctor [--deep] | logs | uninstall
 
 | Key | Default | Meaning |
 |---|---|---|
-| `mode` | `"cold"` | `"cold"` starts Windows when an app is opened and stops it when idle. `"warm"` starts it when you log in (the bar widget does that) and keeps it on: the window opens in a few seconds, and the VM's memory stays in use. |
-| `idleMinutes` | `5` | Stop the VM this long after the Windows window closes. `0` never does. Apps left open in Windows are stopped with it. |
+| `idleMinutes` | `5` | Put Windows to sleep this long after its window closes (shut it down, without sudoless Docker). `0` never does. |
 | `shares` | none | Folders redirected into Windows; choose them with `winapp share pick`. |
 | `scale` | `"auto"` | `"auto"` follows the focused monitor; or a percentage such as `150`. |
 | `pointerScale` | `"auto"` | What Windows' mouse pointer is reduced by on a scaled monitor: `"auto"` is the focused monitor's scale; or a percentage, `100` for none. |

@@ -7,10 +7,11 @@ import qs.Commons
 import qs.Ui
 
 // Bar widget for the Windows VM behind the bundled `winapp` command. The icon
-// is dim while the VM is off; the panel opens Windows apps in the Windows
-// window (booting the VM first when needed), switches the VM on and off, and sets whether Windows is
-// kept on from login (warm) or started for an app and stopped when idle (cold). Everything it shows comes from
-// `winapp state`, and everything it does is a `winapp` command.
+// is dim while Windows is off or asleep; the panel opens Windows apps in the
+// Windows window (starting or waking the VM first when needed), turns Windows
+// on, puts it to sleep (paused, still in memory) or shuts it down (memory
+// freed), and sets how long it sits idle before it sleeps. Everything it shows
+// comes from `winapp state`, and everything it does is a `winapp` command.
 Panel {
   id: win
   moduleName: "ryancoxrbc.winapp"
@@ -37,13 +38,16 @@ Panel {
   readonly property string glyphChip: String.fromCodePoint(0xF035B)
   readonly property string glyphFolder: String.fromCodePoint(0xF024B)
   readonly property string glyphTune: String.fromCodePoint(0xF062E)
+  readonly property string glyphOn: String.fromCodePoint(0xF0425)
+  readonly property string glyphSleep: String.fromCodePoint(0xF04B2)
+  readonly property string glyphOff: String.fromCodePoint(0xF0902)
 
   // --- state, as reported by `winapp state` -----------------------------------
   property bool installed: true
-  property string vm: "stopped"        // stopped | starting | running | stopping
+  property string vm: "stopped"        // stopped | starting | running | asleep | stopping
   property int windows: 0
   property bool desktop: false         // the full desktop is open; apps cannot be
-  property string mode: "cold"         // cold: started for an app | warm: kept on from login
+  property bool canSleep: true         // false without direct Docker: the idle timer shuts down
   property int idleMinutes: 5
   property real idleDeadline: 0        // epoch seconds, 0 = no countdown
   property real clockOffset: 0         // helper clock minus ours, in seconds
@@ -55,17 +59,13 @@ Panel {
   property int undecided: 0            // changes to Windows waiting for an answer
   property string lastError: ""
   // What was just asked for, until the helper's own state catches up.
-  property string pending: ""          // "" | "start" | "stop"
+  property string pending: ""          // "" | "start" | "sleep" | "stop"
   property bool confirmStop: false
 
   readonly property bool off: vm === "stopped" && pending !== "start"
+  readonly property bool asleep: vm === "asleep" && pending === ""
   readonly property bool busy: vm === "starting" || vm === "stopping" || pending !== ""
-  readonly property bool on: !off && vm !== "stopping" && pending !== "stop"
-
-  readonly property var modeOptions: [
-    { "value": "cold", "label": "Cold" },
-    { "value": "warm", "label": "Warm" }
-  ]
+  readonly property bool awake: vm === "running" && pending === ""
 
   readonly property var idleOptions: [
     { "value": "1", "label": "1m" },
@@ -80,7 +80,9 @@ Panel {
   readonly property var rows: {
     var list = []
     if (!installed) return [{ "kind": "install" }]
-    list.push({ "kind": "power" })
+    if (off || asleep) list.push({ "kind": "on" })
+    if (awake && canSleep) list.push({ "kind": "sleep" })
+    if (awake || asleep) list.push({ "kind": "shutdown" })
     if (confirmStop) {
       list.push({ "kind": "stopNow" })
       list.push({ "kind": "stopCancel" })
@@ -91,14 +93,12 @@ Panel {
     list.push({ "kind": "resources" })
     list.push({ "kind": "shares" })
     if (undecided > 0) list.push({ "kind": "changes" })
-    if (mode !== "warm") list.push({ "kind": "idle" })
-    list.push({ "kind": "mode" })
+    list.push({ "kind": "idle" })
     return list
   }
   property int cursor: 0
   property bool cursorActive: false
   property int idleCursor: 0
-  property int modeCursor: 0
 
   function cursorOn(kind, index) {
     if (!cursorActive || cursor < 0 || cursor >= rows.length) return false
@@ -121,19 +121,18 @@ Panel {
     if (dy !== 0) {
       cursor = Math.max(0, Math.min(rows.length - 1, cursor + dy))
       if (cursorOn("idle")) idleCursor = selectedIdleIndex()
-      if (cursorOn("mode")) modeCursor = mode === "warm" ? 1 : 0
       scrollCursorIntoView()
     } else if (dx !== 0 && cursorOn("idle")) {
       idleCursor = Math.max(0, Math.min(idleOptions.length - 1, idleCursor + dx))
-    } else if (dx !== 0 && cursorOn("mode")) {
-      modeCursor = Math.max(0, Math.min(modeOptions.length - 1, modeCursor + dx))
     }
   }
 
   function activateCursor() {
     if (!cursorActive || cursor < 0 || cursor >= rows.length) return
     var row = rows[cursor]
-    if (row.kind === "power") togglePower()
+    if (row.kind === "on") turnOn()
+    else if (row.kind === "sleep") sleepVm()
+    else if (row.kind === "shutdown") askShutDown()
     else if (row.kind === "stopNow") stopVm()
     else if (row.kind === "stopCancel") confirmStop = false
     else if (row.kind === "app") launch(apps[row.index].id)
@@ -142,7 +141,6 @@ Panel {
     else if (row.kind === "resources") changeResources()
     else if (row.kind === "shares") pickShares()
     else if (row.kind === "changes") reviewChanges()
-    else if (row.kind === "mode") setMode(modeOptions[modeCursor].value)
     else if (row.kind === "idle") setIdle(idleOptions[idleCursor].value)
     else if (row.kind === "install") installVm()
   }
@@ -154,8 +152,8 @@ Panel {
 
   function scrollCursorIntoView() {
     if (!panelFlick || cursor < 0 || cursor >= rows.length) return
-    if (rows[cursor].kind === "mode" || rows[cursor].kind === "idle") {
-      // the last sections: all the way down shows them whole
+    if (rows[cursor].kind === "idle") {
+      // the last section: all the way down shows it whole
       Qt.callLater(function() { panelFlick.contentY = Math.max(0, panelFlick.contentHeight - panelFlick.height) })
       return
     }
@@ -195,15 +193,16 @@ Panel {
     cores = String(parsed.cores || "")
     if (JSON.stringify(parsed.shares || []) !== JSON.stringify(shares)) shares = parsed.shares || []
     undecided = parsed.undecided || 0
-    mode = parsed.mode === "warm" ? "warm" : "cold"
+    canSleep = parsed.canSleep !== false
     idleMinutes = parsed.idleMinutes
     idleDeadline = parsed.idleDeadline || 0
     clockOffset = (parsed.now || 0) - Date.now() / 1000
     // reassign only on change, or every poll would rebuild the rows
     if (JSON.stringify(parsed.apps || []) !== JSON.stringify(apps)) apps = parsed.apps || []
-    if (pending === "start" && vm !== "stopped") pending = ""
-    if (pending === "stop" && vm !== "running") pending = ""
-    if (vm !== "running") confirmStop = false
+    if (pending === "start" && vm !== "stopped" && vm !== "asleep") pending = ""
+    if (pending === "sleep" && vm !== "running") pending = ""
+    if (pending === "stop" && vm !== "running" && vm !== "asleep") pending = ""
+    if (vm !== "running" && vm !== "asleep") confirmStop = false
     tick()
   }
 
@@ -222,12 +221,13 @@ Panel {
     if (lastError !== "") return "Not working"
     if (!installed) return "Not set up"
     if (vm === "stopping" || pending === "stop") return "Shutting down…"
+    if (pending === "sleep") return "Going to sleep…"
     if (off) return "Off"
+    if (vm === "asleep" && pending === "start") return "Waking…"
+    if (asleep) return "Asleep"
     if (vm !== "running") return "Starting…"
     if (desktop) return "Open"
-    if (idleDeadline > 0) return "Idle · stops in " + countdown()
-    if (mode === "warm") return "On · kept ready"
-    if (idleMinutes === 0) return "On · stays on until stopped"
+    if (idleDeadline > 0) return "Idle · " + (canSleep ? "sleeps" : "shuts down") + " in " + countdown()
     return "On"
   }
 
@@ -246,7 +246,7 @@ Panel {
   }
 
   function expectStart() {
-    if (vm !== "stopped") return
+    if (vm !== "stopped" && vm !== "asleep") return
     pending = "start"
     pendingTimeout.restart()
   }
@@ -287,6 +287,20 @@ Panel {
     run(["start"])
   }
 
+  // On: start or wake Windows, and open its window.
+  function turnOn() {
+    if (busy) return
+    openDesktop()
+  }
+
+  function sleepVm() {
+    if (busy || !awake || !canSleep) return
+    confirmStop = false
+    pending = "sleep"
+    pendingTimeout.restart()
+    run(["sleep"])
+  }
+
   function stopVm() {
     confirmStop = false
     pending = "stop"
@@ -294,35 +308,29 @@ Panel {
     run(["stop"])
   }
 
-  // Apps in Windows keep running when its window is closed, so stopping
-  // could take unsaved work with it: ask first, in the panel, which a
-  // keybinding may have to open for the question to be seen.
+  // Apps in Windows keep running when its window is closed, and asleep they
+  // are as they were left, so shutting down could take unsaved work with it:
+  // ask first, in the panel, which a keybinding may have to open for the
+  // question to be seen.
+  function askShutDown() {
+    if (busy || !(awake || asleep)) return
+    if (!opened) open()
+    confirmStop = true
+    setCursor("stopCancel")
+  }
+
+  // The bar's power key: on when off or asleep, otherwise sleep (or, where
+  // Windows cannot sleep, the shut-down question).
   function togglePower() {
     if (busy) return
-    if (off) startVm()
-    else if (vm === "running" && !confirmStop) {
-      if (!opened) open()
-      confirmStop = true
-      setCursor("stopCancel")
-    }
+    if (off || asleep) turnOn()
+    else if (canSleep) sleepVm()
+    else if (!confirmStop) askShutDown()
     else stopVm()
   }
 
-  function setMode(value) {
-    if (value === mode) return
-    mode = value
-    if (value === "warm") expectStart()
-    run(["mode", value])
-  }
-
-  // What the chosen mode costs and buys, with this VM's own memory figure.
-  function modeText() {
-    var memory = ram !== "" ? ram.replace(/G$/, " GB") + " of memory" : "its memory"
-    if (mode === "warm")
-      return "Windows starts when you log in and stays on, so every app opens in about 3 seconds. It holds "
-        + memory + " all the time, in use or not."
-    return "Windows starts when you open an app (about 15 seconds) and stops when idle, using no memory in between. "
-      + "Warm keeps it on from login: apps open in about 3 seconds, but it holds " + memory + " all the time."
+  function memoryText() {
+    return ram !== "" ? ram.replace(/G$/, " GB") : "its memory"
   }
 
   function setIdle(minutes) {
@@ -392,6 +400,7 @@ Panel {
     function refresh(): string { win.refresh(); return "ok" }
     function start(): string { win.startVm(); return "ok" }
     function stop(): string { win.stopVm(); return "ok" }
+    function sleep(): string { win.sleepVm(); return "ok" }
     function power(): string { win.togglePower(); return win.statusText() }
     function status(): string { return win.statusText() }
   }
@@ -401,7 +410,7 @@ Panel {
     anchors.fill: parent
     bar: win.bar
     text: win.glyphWindows
-    opacity: win.off ? 0.4 : (win.busy ? 0.7 : 1.0)
+    opacity: win.off || win.asleep ? 0.4 : (win.busy ? 0.7 : 1.0)
     tooltipText: "Windows · " + win.statusText()
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.MiddleButton) win.refresh()
@@ -452,53 +461,20 @@ Panel {
           width: panelFlick.width
           spacing: Style.space(12)
 
-          Item {
-            id: header
+          PanelHero {
+            id: hero
             width: parent.width
-            implicitHeight: hero.implicitHeight
-            // The hero's trailing control is created inside PanelHero, so it
-            // reads panel state through this item rather than by id.
-            readonly property bool ringVisible: win.cursorOn("power")
-            readonly property bool switchVisible: win.installed && win.lastError === ""
-            readonly property bool switchOn: win.on
-            readonly property bool switchBusy: win.busy
-            readonly property string hint: win.off ? "Start Windows" : "Stop Windows"
-            function focusSwitch() { win.setCursor("power") }
-            function toggle() { win.togglePower() }
-
-            PanelHero {
-              id: hero
-              width: parent.width
-              title: "Windows"
-              meta: win.statusText()
-              foreground: win.foreground
-              fontFamily: win.fontFamily
-              iconOpacity: win.off ? 0.5 : 1.0
-              iconComponent: Component {
-                Text {
-                  text: win.glyphWindows
-                  color: win.foreground
-                  font.family: win.fontFamily
-                  font.pixelSize: Style.font.display
-                }
-              }
-              trailingControl: Component {
-                ToggleSwitch {
-                  id: powerSwitch
-                  visible: header.switchVisible
-                  checked: header.switchOn
-                  busy: header.switchBusy
-                  hasCursor: header.ringVisible
-                  foreground: hero.foreground
-                  onHovered: function(isHovered) { if (isHovered) header.focusSwitch() }
-                  onToggled: header.toggle()
-
-                  PanelToolTip {
-                    visible: powerSwitch.containsMouse
-                    text: header.hint
-                    fontFamily: hero.fontFamily
-                  }
-                }
+            title: "Windows"
+            meta: win.statusText()
+            foreground: win.foreground
+            fontFamily: win.fontFamily
+            iconOpacity: win.off || win.asleep ? 0.5 : 1.0
+            iconComponent: Component {
+              Text {
+                text: win.glyphWindows
+                color: win.foreground
+                font.family: win.fontFamily
+                font.pixelSize: Style.font.display
               }
             }
           }
@@ -514,7 +490,45 @@ Panel {
             wrapMode: Text.WordWrap
           }
 
-          // Stopping while apps are open
+          // On, sleep, shut down: only what makes sense from where it is
+          Column {
+            visible: win.installed && win.lastError === ""
+            width: parent.width
+            spacing: Style.space(2)
+
+            ActionRow {
+              visible: win.off || win.asleep || (win.busy && win.pending === "start")
+              width: parent.width
+              kind: "on"
+              glyph: win.glyphOn
+              title: "On"
+              subtitle: win.vm === "asleep" ? "Wakes Windows as you left it, in a few seconds"
+                : "Starts Windows and opens its window"
+              onActivated: win.turnOn()
+            }
+
+            ActionRow {
+              visible: win.canSleep && (win.awake || win.pending === "sleep")
+              width: parent.width
+              kind: "sleep"
+              glyph: win.glyphSleep
+              title: "Sleep"
+              subtitle: "Keeps Windows in RAM (" + win.memoryText() + "): back in seconds, apps as you left them"
+              onActivated: win.sleepVm()
+            }
+
+            ActionRow {
+              visible: win.awake || win.asleep || win.pending === "stop" || win.vm === "stopping"
+              width: parent.width
+              kind: "shutdown"
+              glyph: win.glyphOff
+              title: "Shut down"
+              subtitle: "Frees the RAM (" + win.memoryText() + "); unsaved work in its apps is lost"
+              onActivated: win.askShutDown()
+            }
+          }
+
+          // Shutting down while apps may be open
           Column {
             visible: win.confirmStop
             width: parent.width
@@ -523,8 +537,8 @@ Panel {
             Text {
               textFormat: Text.PlainText
               width: parent.width
-              text: "Apps in Windows keep running when its window is closed."
-                + " Stopping now discards anything not saved in them."
+              text: "Apps in Windows keep running when its window is closed, and asleep they stay as they were."
+                + " Shutting down discards anything not saved in them."
               color: win.urgent
               font.family: win.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -537,7 +551,7 @@ Panel {
 
               Button {
                 width: (parent.width - parent.spacing) / 2
-                text: "Stop anyway"
+                text: "Shut down"
                 fontSize: Style.font.caption
                 foreground: win.foreground
                 fontFamily: win.fontFamily
@@ -549,7 +563,7 @@ Panel {
 
               Button {
                 width: (parent.width - parent.spacing) / 2
-                text: "Keep running"
+                text: "Cancel"
                 fontSize: Style.font.caption
                 foreground: win.foreground
                 fontFamily: win.fontFamily
@@ -693,12 +707,12 @@ Panel {
           }
 
           Column {
-            visible: win.installed && win.mode !== "warm"
+            visible: win.installed
             width: parent.width
             spacing: Style.space(10)
 
             PanelSectionHeader {
-              text: "STOP WHEN IDLE FOR"
+              text: win.canSleep ? "SLEEP WHEN IDLE FOR" : "SHUT DOWN WHEN IDLE FOR"
               foreground: win.foreground
               fontFamily: win.fontFamily
             }
@@ -718,45 +732,6 @@ Panel {
                 win.setCursor("idle")
                 win.idleCursor = index
               }
-            }
-          }
-
-          Column {
-            visible: win.installed
-            width: parent.width
-            spacing: Style.space(10)
-
-            PanelSectionHeader {
-              text: "START-UP"
-              foreground: win.foreground
-              fontFamily: win.fontFamily
-            }
-
-            ButtonGroup {
-              options: win.modeOptions
-              value: win.mode
-              cursorIndex: win.cursorOn("mode") ? win.modeCursor : -1
-              foreground: win.foreground
-              fontFamily: win.fontFamily
-              fontSize: Style.font.caption
-              focusable: false
-              spacing: Style.spacing.xs
-              onChanged: function(value) { win.setMode(value) }
-              onHovered: function(index, isHovered) {
-                if (!isHovered) return
-                win.setCursor("mode")
-                win.modeCursor = index
-              }
-            }
-
-            Text {
-              textFormat: Text.PlainText
-              width: parent.width
-              text: win.modeText()
-              color: win.dim
-              font.family: win.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              wrapMode: Text.WordWrap
             }
           }
         }

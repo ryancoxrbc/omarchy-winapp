@@ -43,17 +43,20 @@ file or, where that cannot be read, from the size of the disk image, and the
 command refuses rather than guess: dockur would take a larger figure as a
 request to grow the disk.
 
-## Cold or warm
+## On, asleep, off
 
-Cold, the VM is started by the first app or file and stopped by a timer once
-the Windows window has been closed for a while. Warm (`winapp mode warm`, or the panel),
-there is no timer, and the VM is started once per login: by the first
-`winapp state`, which the bar widget asks for as soon as it is up. Once, so
-that stopping Windows by hand holds until the next app or the next login.
-What warm costs is memory: Windows touches all it is given soon after it
-boots, so the VM holds its full allowance for as long as it runs. After a
-reboot of the computer, the start asks for your password like any other first
-start does, this time at login.
+The VM is started by the first app or file, and put to sleep by a timer once
+the Windows window has been closed for a while (`idleMinutes`). Asleep is
+`docker pause`: the VM's processes are frozen, so Windows uses no processor
+time, and it keeps everything it held, apps and unsaved work included, along
+with its full memory allowance. The next app, file or `winapp start` unpauses
+it, and Windows carries on where it was, still signed in, in about a second.
+Shut down (`winapp stop`, or the panel) is the way to get the memory back; a
+sleeping VM is woken first so that Windows can hear the shutdown.
+
+Sleep needs Docker without a password prompt. Omarchy's helper, which winapp
+uses otherwise, has no pause, and from outside a paused VM cannot be told from
+a running one; there the timer shuts Windows down, as it always did.
 
 ## One window, and everything opens in it
 

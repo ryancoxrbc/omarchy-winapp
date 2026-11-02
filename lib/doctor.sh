@@ -78,7 +78,7 @@ cmd_doctor() {
   else
     note "no $CREDENTIALS" "falling back to the installer's default account (docker / admin)"
   fi
-  say "  · state: $(vm_state), idle shutdown after $(idle_minutes) min$([[ $(idle_minutes) == 0 ]] && echo ' (never)')"
+  say "  · state: $(vm_state), $(if can_sleep; then echo sleeps; else echo "shuts down"; fi) when idle $(if (($(idle_minutes) > 0)); then echo "for $(idle_minutes) min"; else echo "(never)"; fi)"
 
   say ""
   say "Folders Windows can reach"

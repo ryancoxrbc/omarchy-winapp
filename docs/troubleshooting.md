@@ -70,9 +70,10 @@ while it is still in the cache, with `IgnorePkg = freerdp` in
 
 **It asks for my password a lot.**
 Without sudoless Docker, Omarchy asks on every start and stop, including the
-automatic stop after the VM has sat idle. Turning on sudoless Docker in Omarchy
-is the way to stop the prompts; a longer `idleMinutes`, or `0`, makes the
-automatic stop rarer.
+automatic stop after the VM has sat idle, and Windows cannot sleep. Turning on
+sudoless Docker in Omarchy stops the prompts and lets the timer put Windows to
+sleep instead; otherwise a longer `idleMinutes`, or `0`, makes the automatic
+stop rarer.
 
 **It asks once after every reboot even with sudoless Docker.**
 Expected: the mounts between your home folder and the VM have to be recreated

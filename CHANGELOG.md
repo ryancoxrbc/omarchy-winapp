@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Changed
+
+- Windows sleeps instead of shutting down. The panel has **On**, **Sleep**
+  (Windows stays in RAM, paused, using no processor, and wakes in seconds
+  with its apps as you left them) and **Shut down** (frees the RAM), and the
+  idle timer puts Windows to sleep. Sleep needs sudoless Docker; without it,
+  the timer shuts Windows down as before. New command: `winapp sleep`.
+
+### Removed
+
+- Cold and warm start-up (`winapp mode`, the `mode` setting, and the panel's
+  switch and Start-up choice). Windows starts when you open something, and
+  sleeping takes the place of keeping it on.
+
 ### Fixed
 
 - Windows ran out of memory after copying on Linux. When Xwayland refused to

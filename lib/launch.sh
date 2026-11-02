@@ -127,11 +127,13 @@ cmd___desktop() {
   still_open_warning
 }
 
-# Closing the window does not close the apps in it, and stopping Windows when
-# idle would lose what they have not saved. The agent keeps a list of their
-# windows in the request folder; what it said last is what was open.
+# Closing the window does not close the apps in it. Where Windows can sleep,
+# that keeps them as they are; where it can only be shut down when idle, that
+# would lose what they have not saved. The agent keeps a list of their windows
+# in the request folder; what it said last is what was open.
 still_open_warning() {
   local open minutes
+  can_sleep && return 0
   minutes=$(idle_minutes)
   ((minutes > 0)) || return 0
   open=$(sed '/^[[:space:]]*$/d' "$REQUESTS/open.txt" 2>/dev/null | head -n 6)

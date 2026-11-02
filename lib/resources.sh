@@ -139,6 +139,8 @@ cmd_resources() {
   if clients_alive || desktop_elsewhere; then
     die "close the Windows window first (and save what is open in it): the change needs Windows to restart"
   fi
+  # asleep, its apps may hold unsaved work, and restarting would lose it
+  vm_asleep && die "Windows is asleep with its apps as you left them: open it, save, and shut it down first (winapp stop); the change needs Windows to restart"
   ((HOST_RAM_GB - ${ram%G} >= 4)) || warn "that leaves under 4 GB for Linux while Windows is running"
 
   resources_write "$ram" "$cores"

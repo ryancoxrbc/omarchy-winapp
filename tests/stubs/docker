@@ -1,14 +1,17 @@
 #!/bin/bash
-# The VM is "running" while tests/…/vm-running exists.
+# The VM is "running" while tests/…/vm-running exists, "paused" while
+# tests/…/vm-paused does too.
 out=${STUB_OUT:?}
 echo "docker $*" >>"$out/docker.calls"
 case "$1" in
 inspect)
   [[ -e $out/vm-running ]] || exit 1
   case "$*" in
-  *State.Status*) echo running ;;
+  *State.Status*) if [[ -e $out/vm-paused ]]; then echo paused; else echo running; fi ;;
   *State.StartedAt*) echo 2026-01-01T00:00:00Z ;;
   esac
   ;;
 logs) echo "Windows started successfully" ;;
+pause) [[ -e $out/vm-running ]] && : >"$out/vm-paused" || exit 1 ;;
+unpause) [[ -e $out/vm-paused ]] && rm -f "$out/vm-paused" || exit 1 ;;
 esac

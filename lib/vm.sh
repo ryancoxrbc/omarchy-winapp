@@ -56,6 +56,15 @@ vm_running() {
   fi
 }
 
+# Asleep: the container is paused. Windows is frozen where it was, apps and
+# unsaved work included, holding its memory but no processor time. Only seen,
+# and only possible, with Docker reachable directly: Omarchy's helper has no
+# pause, and without Docker a paused VM looks like a running one from outside.
+vm_asleep() {
+  docker_direct && [[ $(docker inspect --format='{{.State.Status}}' "$CONTAINER" 2>/dev/null) == paused ]]
+}
+can_sleep() { docker_direct; }
+
 marker_alive() { # a file holding the pid of the process that is doing something
   local pid
   pid=$(cat "$RUN_DIR/$1" 2>/dev/null) || return 1
@@ -271,8 +280,12 @@ vm_up_locked() {
     vm_stopping || break
     sleep 1
   done
-  if vm_running && { primed || desktop_elsewhere; }; then return 0; fi
   log=$(new_log vm)
+  # asleep: it wakes where it was, in a second or two, still signed in
+  if vm_asleep; then
+    docker unpause "$CONTAINER" >>"$log" 2>&1 || die "could not wake Windows (log: $log)"
+  fi
+  if vm_running && { primed || desktop_elsewhere; }; then return 0; fi
   echo $$ >"$RUN_DIR/starting"
   if ! vm_running; then
     notify "Starting Windows…" "${1:-This takes about a minute.}"
@@ -292,6 +305,8 @@ vm_stop() {
   local rc=0
   ensure_dirs
   idle_cancel
+  # a paused Windows cannot hear the shutdown request: wake it to shut down
+  vm_asleep && docker unpause "$CONTAINER" >/dev/null 2>&1
   if ! vm_running; then
     vm_note_stopped
     return 0
@@ -308,7 +323,22 @@ vm_stop() {
   vm_note_stopped
 }
 
-# Shut the VM down after it has sat unused. The file holds "<token> <deadline>"
+# Put Windows to sleep: close the window (its apps stay open in Windows) and
+# pause the VM. Nothing is lost, and the next app or file wakes it.
+vm_sleep() {
+  ensure_dirs
+  idle_cancel
+  can_sleep || die "sleep needs Docker without a password prompt (the docker group); shut Windows down instead: winapp stop"
+  vm_asleep && return 0
+  vm_running || die "Windows is not running"
+  desktop_elsewhere && die "$SESSION_IN_USE"
+  clients_kill
+  docker pause "$CONTAINER" >/dev/null 2>&1 || die "could not put Windows to sleep"
+  idle_cancel # the closed window may have just set the timer
+}
+
+# Put the VM to sleep after it has sat unused (shut it down where it cannot
+# sleep). The file holds "<token> <deadline>"
 # so the bar widget can show a countdown; a new launch cancels the timer, and a
 # timer that was somehow left behind finds its token gone and does nothing.
 idle_cancel() {
@@ -324,6 +354,7 @@ idle_arm() {
   idle_cancel
   minutes=$(idle_minutes)
   ((minutes > 0)) || return 0
+  vm_asleep && return 0
   echo "$token $(($(date +%s) + minutes * 60))" >"$RUN_DIR/idle"
   detached "$SELF" __idle "$token" "$minutes"
 }
@@ -338,9 +369,13 @@ cmd___idle() { # the detached half of idle_arm
   wait "$sleeper"
   [[ $(cut -d' ' -f1 "$RUN_DIR/idle" 2>/dev/null) == "$token" ]] || exit 0
   rm -f "$RUN_DIR/idle.pid"
-  # not ours to stop while something else is using it
+  # not ours to put away while something else is using it
   clients_alive && exit 0
   desktop_elsewhere && exit 0
+  if can_sleep; then
+    vm_sleep
+    exit 0
+  fi
   # In prompt mode the stop asks for a password; say why a prompt is appearing.
   if ! docker_direct && [[ $(cfg .passwordless false) != true ]]; then
     notify "Stopping Windows" "Idle for $minutes min. Omarchy asks for your password to stop the VM."
@@ -352,11 +387,13 @@ cmd___idle() { # the detached half of idle_arm
 
 # --- status ------------------------------------------------------------------
 
-vm_state() { # stopped | starting | running | stopping
+vm_state() { # stopped | starting | running | asleep | stopping
   if vm_stopping; then
     echo stopping
   elif vm_starting; then
     echo starting
+  elif vm_asleep; then
+    echo asleep
   elif vm_running; then
     echo running
   else
@@ -366,14 +403,14 @@ vm_state() { # stopped | starting | running | stopping
 
 # One JSON object for the bar widget. Cheap enough to be asked every few seconds.
 cmd_state() {
-  local vm deadline=0 n=0 installed=false access=prompt desktop=false apps='[]' ram="" cores="" mode=cold shared undecided change
+  local vm deadline=0 n=0 installed=false access=prompt desktop=false apps='[]' ram="" cores="" shared undecided change sleeps=false
   vm_installed && installed=true
   docker_direct && access=direct
+  can_sleep && sleeps=true
   vm=$(vm_state)
   if [[ $vm == stopped ]]; then
     vm_note_stopped
-    warm_start
-  else
+  elif [[ $vm != asleep ]]; then
     n=$(windows)
     desktop_open && desktop=true
     [[ $vm == running ]] && deadline=$(awk '{print $2}' "$RUN_DIR/idle" 2>/dev/null)
@@ -383,15 +420,14 @@ cmd_state() {
   menu_stale && detached "$SELF" sync --quiet
   [[ -s $APPS_FILE ]] && apps=$(jq -c '[.apps[]? | select(.panel != false)
       | {id, name: (.name // .id), label: (.label // .name // .id), icon: (.icon // "")}]' "$APPS_FILE" 2>/dev/null)
-  warm && mode=warm
   shared=$(shares | cut -f1 | jq -Rcn '[inputs]')
   undecided=$(for change in "${CHANGES[@]}"; do [[ $(change_state "$change") == ask ]] && echo x; done | wc -l)
-  jq -cn --arg vm "$vm" --arg access "$access" --arg version "$(version)" --arg mode "$mode" \
+  jq -cn --arg vm "$vm" --arg access "$access" --arg version "$(version)" --argjson canSleep "$sleeps" \
     --argjson installed "$installed" --argjson windows "${n:-0}" --argjson desktop "$desktop" \
     --arg ram "${ram:-}" --arg cores "${cores:-}" --argjson shares "${shared:-[]}" --argjson undecided "$undecided" \
     --argjson idle "$(idle_minutes)" --argjson deadline "${deadline:-0}" \
     --argjson now "$(date +%s)" --argjson apps "${apps:-[]}" \
-    '{version: $version, installed: $installed, vm: $vm, mode: $mode, access: $access, windows: $windows, desktop: $desktop,
+    '{version: $version, installed: $installed, vm: $vm, canSleep: $canSleep, access: $access, windows: $windows, desktop: $desktop,
       ram: $ram, cores: $cores, shares: $shares, undecided: $undecided,
       idleMinutes: $idle, idleDeadline: $deadline, now: $now, apps: $apps}'
 }
@@ -405,7 +441,9 @@ cmd_status() {
   elif desktop_open; then
     say "Windows VM running, desktop open"
   else
-    say "Windows VM running, window closed, $(if warm; then echo "kept on (warm)"; else echo "idle shutdown after $(idle_minutes) min"; fi)"
+    local after="never"
+    (($(idle_minutes) > 0)) && after="after $(idle_minutes) idle min"
+    say "Windows VM running, window closed; $(if can_sleep; then echo sleeps; else echo "shuts down"; fi) $after"
   fi
 }
 
@@ -413,6 +451,11 @@ cmd_start() {
   vm_up
   # nothing to show, just leave the VM up on its idle timer
   clients_alive || idle_arm
+}
+
+cmd_sleep() {
+  vm_installed || die "the Windows VM is not set up"
+  vm_sleep
 }
 
 cmd_stop() {
