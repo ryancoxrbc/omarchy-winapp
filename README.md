@@ -137,8 +137,9 @@ rather have the suffix everywhere or nowhere.
 Omarchy's *Windows* entry in the app launcher opens the same VM's desktop. When
 winapp is set up, *Windows* in the launcher is winapp's, and Omarchy's is still
 there as **Omarchy Windows**. The difference: winapp's window is where files
-from Linux open, and closing it leaves Windows running on the idle timer;
-Omarchy's cannot be handed files and shuts the VM down when it closes. While
+from Linux open, and closing it leaves Windows running until the idle timer
+puts it to sleep; Omarchy's cannot be handed files and shuts the VM down when
+it closes. While
 Omarchy's is open, winapp asks you to close it before opening a file.
 `winapp uninstall` gives Omarchy's entry its name back.
 
@@ -180,16 +181,20 @@ winapp resources --ram 8 --cores 4   # either option alone works too
 This rewrites the VM's configuration through Omarchy's own helper, so it asks
 for your password once. The new values
 apply the next time Windows starts. The disk and everything on it are left
-exactly as they are.
+exactly as they are. While Windows is asleep the change is refused, since the
+restart would close its apps: open it, save, and shut it down first.
 
 ## Passwords
 
 Omarchy starts and stops the Windows VM through Docker. If you have turned on
-*sudoless Docker*, nothing here ever asks for a password.
+*sudoless Docker*, nothing here ever asks for a password, and Windows can
+sleep.
 
 If you have not (the Omarchy default), Omarchy asks for your password each time
-the VM starts and each time it stops, including when it stops by itself after
-sitting idle. That is Omarchy's own prompt, and the plugin leaves it alone.
+the VM starts and each time it stops. Windows cannot sleep then: Omarchy's
+helper has no way to pause the VM, so the panel has no Sleep and the idle timer
+shuts Windows down instead, which asks for the password too. That is Omarchy's
+own prompt, and the plugin leaves it alone.
 
 ## Commands
 
@@ -227,7 +232,7 @@ winapp setup | doctor [--deep] | logs | uninstall
 | `pointerScale` | `"auto"` | What Windows' mouse pointer is reduced by on a scaled monitor: `"auto"` is the focused monitor's scale; or a percentage, `100` for none. |
 | `windowsSuffix` | `"auto"` | Add " (Windows)" to a launcher name: `"auto"` only when another app has the same name, `"always"`, or `"never"`. |
 | `superKey` | `"linux"` | `"linux"` keeps the Super key for Omarchy's shortcuts, so Windows' Start menu does not open when you switch workspace. `"windows"` passes it to Windows. |
-| `fastStart` | not set | Your answer to "Start Windows faster?": `true` switches off Windows' sign-in on the VM's own console, so a cold start does not wait half a minute for it; `false` leaves or restores it; not set means you have not been asked yet. See [what is changed in Windows](docs/how-it-works.md#what-is-changed-in-windows). |
+| `fastStart` | not set | Your answer to "Start Windows faster?": `true` switches off Windows' sign-in on the VM's own console, so starting Windows from off does not wait half a minute for it; `false` leaves or restores it; not set means you have not been asked yet. See [what is changed in Windows](docs/how-it-works.md#what-is-changed-in-windows). |
 | `trimWindows` | not set | Your answer to switching off Windows' search indexer and Widgets, in the same three states. |
 | `rdpArgs` | `[]` | Extra FreeRDP arguments for the Windows window, for example `["/microphone"]` or `["/kbd:layout:0x0407"]`. |
 
@@ -260,8 +265,9 @@ winapp logs            # the latest session log
   `winapp changes` lists everything it does there.
 - **Closing the window is not closing the apps.** Apps in Windows keep
   running, as on a real PC whose screen you switch off, and are there again
-  when the window opens. The VM's idle timer stops them with Windows, so save
-  before you walk away.
+  when the window opens. Sleep keeps them as they are, unsaved work included;
+  shutting down closes them, so save first. (Without sudoless Docker the idle
+  timer shuts down rather than sleeps.)
 - **A file outside the shared folders** makes the window connect again with
   that folder added. The apps in it stay open; the picture is redrawn.
 - **Store apps** (the ones without a real `.exe`) are not found by the scan.
@@ -282,14 +288,18 @@ The Windows VM itself is Omarchy's and is left alone.
 
 ## Status
 
-3.0 replaces the app-per-window design of 2.x with the one Windows window; it
-is new and has had less use than 2.x had. Developed on Omarchy 4.0 with
-FreeRDP 3.31 and Windows 11. For 2.x, both
-ways of reaching the VM have been run end to end on the same machine: with
-sudoless Docker, and with Docker access switched off so that starting and
-stopping go through Omarchy's password prompt. It has not yet been run on a second machine. If something
-misbehaves, `winapp doctor` and an issue with `winapp logs` attached are very
-welcome.
+3.0 replaced the app-per-window design of 2.x with the one Windows window;
+3.1 adds sleep and fixes a FreeRDP clipboard loop that could fill Windows'
+memory (reported upstream as FreeRDP/FreeRDP#13992). Developed on Omarchy 4.0
+with FreeRDP 3.31 and Windows 11. Avoid FreeRDP 3.32.0 to 3.32.2: they can
+freeze the window when a dialog closes (fixed in 3.33.0, FreeRDP PR #13769).
+
+Sleep has been tested with sudoless Docker only, the way it is built to work.
+For 2.x, both ways of reaching the VM were run end to end on the same machine:
+with sudoless Docker, and with Docker access switched off so that starting and
+stopping go through Omarchy's password prompt. It has not yet been run on a
+second machine. If something misbehaves, `winapp doctor` and an issue with
+`winapp logs` attached are very welcome.
 
 ## License
 

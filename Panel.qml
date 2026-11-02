@@ -40,7 +40,7 @@ Panel {
   readonly property string glyphTune: String.fromCodePoint(0xF062E)
   readonly property string glyphOn: String.fromCodePoint(0xF0425)
   readonly property string glyphSleep: String.fromCodePoint(0xF04B2)
-  readonly property string glyphOff: String.fromCodePoint(0xF0902)
+  readonly property string glyphOff: String.fromCodePoint(0xF06A6)
 
   // --- state, as reported by `winapp state` -----------------------------------
   property bool installed: true
@@ -426,7 +426,7 @@ Panel {
     open: win.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(340))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(600))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(640))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -502,8 +502,7 @@ Panel {
               kind: "on"
               glyph: win.glyphOn
               title: "On"
-              subtitle: win.vm === "asleep" ? "Wakes Windows as you left it, in a few seconds"
-                : "Starts Windows and opens its window"
+              subtitle: win.vm === "asleep" ? "Wakes Windows as you left it" : "Starts Windows and opens it"
               onActivated: win.turnOn()
             }
 
@@ -513,7 +512,7 @@ Panel {
               kind: "sleep"
               glyph: win.glyphSleep
               title: "Sleep"
-              subtitle: "Keeps Windows in RAM (" + win.memoryText() + "): back in seconds, apps as you left them"
+              subtitle: "Keeps Windows in RAM (" + win.memoryText() + ")"
               onActivated: win.sleepVm()
             }
 
@@ -523,7 +522,7 @@ Panel {
               kind: "shutdown"
               glyph: win.glyphOff
               title: "Shut down"
-              subtitle: "Frees the RAM (" + win.memoryText() + "); unsaved work in its apps is lost"
+              subtitle: "Frees the RAM (" + win.memoryText() + ")"
               onActivated: win.askShutDown()
             }
           }

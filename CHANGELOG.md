@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The panel's notes under Sleep and Shut down were cut off; they are now
+  "Keeps Windows in RAM" and "Frees the RAM", with the memory figure. Shut down
+  has its own icon, so it is not mistaken for On.
+- README: the screenshot and text describe 3.1 (sleep, no cold/warm).
+
 ## 3.1.0 - 2026-11-02
 
 ### Changed
