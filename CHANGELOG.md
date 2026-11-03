@@ -1,9 +1,14 @@
 # Changelog
 
-## Unreleased
+## 3.1.1 - 2026-11-03
 
 ### Fixed
 
+- Omarchy's Super+C, V, X and A (copy, paste, cut, select all) did not work
+  in Windows. Hyprland sends them as Ctrl+C and so on with Ctrl only said to
+  be held, and xfreerdp passes Windows the keys pressed, not the modifiers
+  held. The shim now presses the missing Ctrl around such a chord; Super
+  itself still never reaches Windows.
 - The panel's notes under Sleep and Shut down were cut off; they are now
   "Keeps Windows in RAM" and "Frees the RAM", with the memory figure. Shut down
   has its own icon, so it is not mistaken for On.

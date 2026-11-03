@@ -6,8 +6,8 @@
 Atom fake_last_property, fake_last_value;
 int fake_mapped[64];                        /* by window id */
 unsigned fake_pointer[4], fake_pointer_pixel; /* width, height, xhot, yhot; its first pixel */
-static XEvent queue[8];
-static int queued, taken;
+static XEvent queue[8], back[8];
+static int queued, taken, backs;
 
 void fake_queue(const XEvent* event)
 {
@@ -45,7 +45,31 @@ int XChangeProperty(Display* display, Window window, Atom property, Atom type, i
 int XNextEvent(Display* display, XEvent* event)
 {
 	(void)display;
-	*event = queue[taken++];
+	if (backs)
+		*event = back[--backs];
+	else
+		*event = queue[taken++];
+	return 0;
+}
+
+int XPutBackEvent(Display* display, XEvent* event)
+{
+	(void)display;
+	back[backs++] = *event;
+	return 0;
+}
+
+int fake_waiting(void)
+{
+	return backs + queued - taken;
+}
+
+KeyCode XKeysymToKeycode(Display* display, KeySym symbol)
+{
+	(void)display;
+	if (symbol == 0xffe3) return 37; /* Control_L */
+	if (symbol == 0xffe1) return 50; /* Shift_L */
+	if (symbol == 0xffe9) return 64; /* Alt_L */
 	return 0;
 }
 
@@ -63,6 +87,9 @@ KeySym XLookupKeysym(XKeyEvent* key, int index)
 	(void)index;
 	if (key->keycode == 133) return 0xffeb; /* Super_L */
 	if (key->keycode == 134) return 0xffec; /* Super_R */
+	if (key->keycode == 37) return 0xffe3;  /* Control_L */
+	if (key->keycode == 50) return 0xffe1;  /* Shift_L */
+	if (key->keycode == 64) return 0xffe9;  /* Alt_L */
 	return 0x61;                            /* any other key */
 }
 

@@ -15,7 +15,8 @@ plugin turns that VM into a source of apps:
 - **Windows in one window.** Windows is a single window on your desktop that
   tiles, floats and switches like any other, with its own desktop and taskbar
   inside. Its menus and dialogs stay inside it, where Windows draws them, and
-  the Super key stays Omarchy's.
+  the Super key stays Omarchy's, while Super+C, V, X and A copy, paste, cut
+  and select all in Windows as they do everywhere else.
 - **Your files, in place.** Double-click a `.docx`, `.cdr` or `.sldprt` in the
   file manager and it opens in the Windows app, in that window, which comes
   forward. Save, and the Linux file is updated. Nothing is copied into the VM

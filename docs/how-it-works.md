@@ -177,6 +177,12 @@ down, from the client, and never reports Super as held.
 `"superKey": "windows"` in `config.json` hands the key back to Windows, for
 those who want Win+V or Win+. in the combinations Omarchy leaves free.
 
+Omarchy's Super+C, V, X and A copy, paste, cut and select all by pressing
+Ctrl+C, V, X and A in the focused window, and they work in Windows too.
+Hyprland sends such a chord as a key with Ctrl said to be held but no Ctrl
+key pressed, and the client passes Windows keys, not what is held, so the
+shim presses the missing Ctrl in front of the key and lets go of it after.
+
 ## What is changed in Windows
 
 `winapp changes` lists all of it. There are two kinds.
